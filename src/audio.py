@@ -38,7 +38,7 @@ class AudioRecorder:
         self.device_index = device_index
         self.on_level_update = on_level_update
 
-        self.audio = pyaudio.PyAudio()
+        self.audio: Optional[pyaudio.PyAudio] = None
         self.stream: Optional[pyaudio.Stream] = None
         self.frames: List[bytes] = []
         self.is_recording = False
@@ -81,6 +81,10 @@ class AudioRecorder:
 
         self.frames = []
         self.is_recording = True
+
+        # Create fresh PyAudio instance for each recording session
+        if self.audio is None:
+            self.audio = pyaudio.PyAudio()
 
         self.stream = self.audio.open(
             format=pyaudio.paInt16,
@@ -147,15 +151,27 @@ class AudioRecorder:
             self.stream = None
 
         if not self.frames:
+            # No audio captured, still clean up PyAudio
+            if self.audio:
+                self.audio.terminate()
+                self.audio = None
             return None
+
+        # Get sample width before terminating PyAudio
+        sample_width = self.audio.get_sample_size(pyaudio.paInt16) if self.audio else 2
 
         # Save to temporary WAV file
         temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         with wave.open(temp_file.name, 'wb') as wf:
             wf.setnchannels(self.channels)
-            wf.setsampwidth(self.audio.get_sample_size(pyaudio.paInt16))
+            wf.setsampwidth(sample_width)
             wf.setframerate(self.sample_rate)
             wf.writeframes(b''.join(self.frames))
+
+        # Terminate PyAudio so next recording gets fresh instance
+        if self.audio:
+            self.audio.terminate()
+            self.audio = None
 
         return temp_file.name
 
@@ -166,7 +182,9 @@ class AudioRecorder:
             self.stream.stop_stream()
             self.stream.close()
             self.stream = None
-        self.audio.terminate()
+        if self.audio:
+            self.audio.terminate()
+            self.audio = None
 
     def __del__(self):
         """Destructor to ensure resources are cleaned up."""
