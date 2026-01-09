@@ -5,13 +5,244 @@ Configuration panel for all app settings.
 
 import threading
 from tkinter import filedialog
-from typing import Callable, Optional, List
+from typing import Callable, Optional, List, Set
 
 import customtkinter as ctk
 import requests
+from pynput import keyboard
 
 from .theme import THEME, FONTS
 from ..audio import AudioRecorder
+from ..config import AppConfig
+
+
+class HotkeyCapture(ctk.CTkFrame):
+    """Interactive hotkey capture widget.
+
+    Click to enter listening mode, then hold desired keys to set the hotkey.
+    """
+
+    def __init__(self, parent, variable: ctk.StringVar, **kwargs):
+        super().__init__(parent, fg_color="transparent", **kwargs)
+
+        self.variable = variable
+        self.is_listening = False
+        self.captured_keys: Set[str] = set()
+        self.listener: Optional[keyboard.Listener] = None
+
+        # Main container
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x")
+
+        # Hotkey display/entry
+        self.display = ctk.CTkEntry(
+            row,
+            textvariable=variable,
+            font=FONTS["body"],
+            fg_color=THEME["bg_light"],
+            border_color=THEME["border"],
+            height=36,
+            state="readonly"
+        )
+        self.display.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.display.bind("<Button-1>", lambda e: self.start_capture())
+
+        # Set button
+        self.set_btn = ctk.CTkButton(
+            row,
+            text="Set",
+            font=FONTS["small"],
+            width=70,
+            height=36,
+            fg_color=THEME["action_green"],
+            hover_color=THEME["action_green_hover"],
+            command=self.start_capture
+        )
+        self.set_btn.pack(side="right")
+
+        # Status label
+        self.status_label = ctk.CTkLabel(
+            self,
+            text="Click 'Set' or the field to change hotkey",
+            font=FONTS["small"],
+            text_color=THEME["text_muted"]
+        )
+        self.status_label.pack(anchor="w", pady=(4, 0))
+
+    def start_capture(self) -> None:
+        """Enter listening mode to capture hotkey."""
+        if self.is_listening:
+            return
+
+        self.is_listening = True
+        self.captured_keys = set()
+        self._previous_value = self.variable.get()
+
+        # Update UI to show listening state
+        self.display.configure(
+            fg_color=THEME["bg_medium"],
+            border_color=THEME["accent"]
+        )
+        self.variable.set("Hold your desired keys...")
+        self.status_label.configure(
+            text="Press Escape to cancel",
+            text_color=THEME["accent"]
+        )
+        self.set_btn.configure(
+            text="Cancel",
+            fg_color=THEME["error"],
+            command=self.cancel_capture
+        )
+
+        # Start keyboard listener
+        self.listener = keyboard.Listener(
+            on_press=self._on_key_press,
+            on_release=self._on_key_release
+        )
+        self.listener.start()
+
+    def _key_to_string(self, key) -> Optional[str]:
+        """Convert pynput key to string representation."""
+        try:
+            # Check for modifier keys
+            if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+                return "ctrl"
+            elif key == keyboard.Key.shift_l or key == keyboard.Key.shift_r:
+                return "shift"
+            elif key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
+                return "alt"
+            elif key == keyboard.Key.cmd or key == keyboard.Key.cmd_l or key == keyboard.Key.cmd_r:
+                return "cmd"
+            elif key == keyboard.Key.space:
+                return "space"
+            elif key == keyboard.Key.enter:
+                return "enter"
+            elif key == keyboard.Key.tab:
+                return "tab"
+            elif key == keyboard.Key.esc:
+                return "escape"
+            elif hasattr(key, 'char') and key.char:
+                return key.char.lower()
+            elif hasattr(key, 'name'):
+                return key.name.lower()
+        except AttributeError:
+            pass
+        return None
+
+    def _format_hotkey(self) -> str:
+        """Format captured keys as hotkey string."""
+        # Order: ctrl, alt, shift, cmd, then other keys
+        order = ["ctrl", "alt", "shift", "cmd"]
+        result = []
+
+        for mod in order:
+            if mod in self.captured_keys:
+                result.append(mod)
+
+        # Add non-modifier keys
+        for key in sorted(self.captured_keys):
+            if key not in order:
+                result.append(key)
+
+        return "+".join(result) if result else ""
+
+    def _on_key_press(self, key) -> None:
+        """Handle key press during capture."""
+        if not self.is_listening:
+            return
+
+        key_str = self._key_to_string(key)
+
+        # Escape cancels capture
+        if key_str == "escape":
+            self.after(0, self.cancel_capture)
+            return
+
+        if key_str and key_str not in self.captured_keys:
+            self.captured_keys.add(key_str)
+            # Update display to show current combination
+            hotkey = self._format_hotkey()
+            self.after(0, lambda: self.variable.set(hotkey or "Hold your desired keys..."))
+
+    def _on_key_release(self, key) -> None:
+        """Handle key release - finalize capture when all keys released."""
+        if not self.is_listening:
+            return
+
+        key_str = self._key_to_string(key)
+
+        # Skip escape key release
+        if key_str == "escape":
+            return
+
+        # Remove the released key from our set
+        if key_str in self.captured_keys:
+            self.captured_keys.discard(key_str)
+
+        # If all keys released and we have a valid combination, finalize
+        # We check if captured_keys is empty (all keys released)
+        # but we've already recorded the combination in the display
+        if not self.captured_keys:
+            current_value = self.variable.get()
+            if current_value and current_value != "Hold your desired keys...":
+                self.after(0, lambda: self._finalize_capture(current_value))
+
+    def _finalize_capture(self, hotkey: str) -> None:
+        """Finalize the capture with the given hotkey."""
+        self._stop_listener()
+        self.is_listening = False
+
+        # Update UI to show captured hotkey
+        self.display.configure(
+            fg_color=THEME["bg_light"],
+            border_color=THEME["border"]
+        )
+        self.variable.set(hotkey)
+        self.status_label.configure(
+            text=f"Hotkey set to: {hotkey}",
+            text_color=THEME["success"]
+        )
+        self.set_btn.configure(
+            text="Set",
+            fg_color=THEME["action_green"],
+            command=self.start_capture
+        )
+
+    def cancel_capture(self) -> None:
+        """Cancel the capture and restore previous value."""
+        self._stop_listener()
+        self.is_listening = False
+        self.captured_keys = set()
+
+        # Restore UI
+        self.display.configure(
+            fg_color=THEME["bg_light"],
+            border_color=THEME["border"]
+        )
+        self.variable.set(self._previous_value)
+        self.status_label.configure(
+            text="Click 'Set' or the field to change hotkey",
+            text_color=THEME["text_muted"]
+        )
+        self.set_btn.configure(
+            text="Set",
+            fg_color=THEME["action_green"],
+            command=self.start_capture
+        )
+
+    def _stop_listener(self) -> None:
+        """Stop the keyboard listener."""
+        if self.listener:
+            try:
+                self.listener.stop()
+            except Exception:
+                pass
+            self.listener = None
+
+    def destroy(self) -> None:
+        """Clean up resources."""
+        self._stop_listener()
+        super().destroy()
 
 
 class SettingsPanel(ctk.CTkToplevel):
@@ -123,7 +354,16 @@ class SettingsPanel(ctk.CTkToplevel):
         content = ctk.CTkScrollableFrame(self, fg_color="transparent")
         content.pack(fill="both", expand=True, padx=24)
 
-        # === LLM Settings (moved to top - most important) ===
+        # === Hotkey Settings (top priority - first thing users want to set) ===
+        self._add_section(content, "Hold-to-Talk Hotkey")
+
+        self.hotkey_var = ctk.StringVar(
+            value=self.config.get("hotkey", "ctrl+shift")
+        )
+        self.hotkey_capture = HotkeyCapture(content, self.hotkey_var)
+        self.hotkey_capture.pack(fill="x", pady=(0, 8))
+
+        # === LLM Settings ===
         self._add_section(content, "LLM Configuration")
 
         # Ollama URL with test button
@@ -339,23 +579,6 @@ class SettingsPanel(ctk.CTkToplevel):
         )
         self.mic_status.pack(anchor="w", pady=(4, 8))
 
-        self.hotkey_var = ctk.StringVar(
-            value=self.config.get("hotkey", "ctrl+shift")
-        )
-        self._add_entry(
-            content,
-            "Hold-to-Talk Hotkey:",
-            self.hotkey_var,
-            placeholder="e.g., ctrl+shift"
-        )
-
-        ctk.CTkLabel(
-            content,
-            text="Tip: Use 'ctrl+shift', 'alt+space', etc. Or just use the record button.",
-            font=FONTS["small"],
-            text_color=THEME["text_muted"]
-        ).pack(anchor="w", pady=(0, 8))
-
         # === Output ===
         self._add_section(content, "Output")
 
@@ -538,10 +761,22 @@ class SettingsPanel(ctk.CTkToplevel):
                     self.config["audio_device_index"] = d["index"]
                     break
 
+        # Persist settings to disk
+        self._persist_to_disk()
+
         if self.on_save:
             self.on_save(self.config)
 
         self.destroy()
+
+    def _persist_to_disk(self) -> None:
+        """Persist settings to config file."""
+        try:
+            app_config = AppConfig.from_dict(self.config)
+            app_config.save()
+            print(f"[Settings] Configuration saved to {AppConfig.get_config_path()}")
+        except Exception as e:
+            print(f"[Settings] Failed to save configuration: {e}")
 
     def _reset_defaults(self) -> None:
         """Reset all settings to defaults."""
