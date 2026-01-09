@@ -4,6 +4,7 @@ Configuration panel for all app settings.
 """
 
 import threading
+from tkinter import filedialog
 from typing import Callable, Optional, List
 
 import customtkinter as ctk
@@ -358,10 +359,42 @@ class SettingsPanel(ctk.CTkToplevel):
         # === Output ===
         self._add_section(content, "Output")
 
+        # Output directory with Browse button
+        output_frame = ctk.CTkFrame(content, fg_color="transparent")
+        output_frame.pack(fill="x", pady=6)
+
+        ctk.CTkLabel(
+            output_frame,
+            text="Output Directory:",
+            font=FONTS["body"],
+            text_color=THEME["text_secondary"]
+        ).pack(anchor="w")
+
+        output_row = ctk.CTkFrame(output_frame, fg_color="transparent")
+        output_row.pack(fill="x", pady=(4, 0))
+
         self.output_dir_var = ctk.StringVar(
             value=self.config.get("output_dir", "./outputs")
         )
-        self._add_entry(content, "Output Directory:", self.output_dir_var)
+        ctk.CTkEntry(
+            output_row,
+            textvariable=self.output_dir_var,
+            font=FONTS["body"],
+            fg_color=THEME["bg_light"],
+            border_color=THEME["border"],
+            height=36
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        ctk.CTkButton(
+            output_row,
+            text="Browse",
+            font=FONTS["small"],
+            width=70,
+            height=36,
+            fg_color=THEME["accent_secondary"],
+            hover_color="#6EDDD4",
+            command=self._browse_output_dir
+        ).pack(side="right")
 
         # === Buttons ===
         buttons = ctk.CTkFrame(self, fg_color="transparent")
@@ -404,6 +437,16 @@ class SettingsPanel(ctk.CTkToplevel):
         device_names = ["Default"] + [d["name"] for d in self.audio_devices]
         self.mic_dropdown.configure(values=device_names)
         self.mic_status.configure(text=f"Found {len(self.audio_devices)} input device(s)")
+
+    def _browse_output_dir(self) -> None:
+        """Open directory browser for output directory selection."""
+        current = self.output_dir_var.get() or "./outputs"
+        path = filedialog.askdirectory(
+            initialdir=current,
+            title="Select Output Directory"
+        )
+        if path:
+            self.output_dir_var.set(path)
 
     def _add_section(self, parent, title: str) -> None:
         """Add section header."""

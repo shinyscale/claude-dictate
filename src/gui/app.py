@@ -46,6 +46,9 @@ class ClaudeDictateGUI(ctk.CTk):
         self._create_layout()
         self._bind_hotkey()
 
+        # Connect waveform to audio level updates
+        self.app.recorder.on_level_update = self.waveform.update_level
+
     def _setup_callbacks(self) -> None:
         """Setup application callbacks."""
         self.app.on_recording_start = self._on_recording_start
@@ -167,30 +170,43 @@ class ClaudeDictateGUI(ctk.CTk):
             text_color=THEME["text_primary"]
         ).pack(anchor="w", padx=20, pady=(16, 8))
 
-        # Style selector
+        # Style selector dropdown
         style_frame = ctk.CTkFrame(parent, fg_color="transparent")
         style_frame.pack(fill="x", padx=20, pady=(0, 12))
 
-        self.style_var = ctk.StringVar(value="clean")
-        styles = [
-            ("Clean", "clean"),
-            ("Professional", "professional"),
-            ("Technical", "technical"),
-            ("Casual", "casual"),
-            ("PRD Format", "prd"),
-            ("Markdown", "bullets"),
-        ]
+        # Map display names to style codes
+        self.style_map = {
+            "Clean": "clean",
+            "Professional": "professional",
+            "Technical": "technical",
+            "Casual": "casual",
+            "PRD Format": "prd",
+            "Markdown": "bullets",
+        }
+        style_names = list(self.style_map.keys())
 
-        for label, value in styles:
-            ctk.CTkRadioButton(
-                style_frame,
-                text=label,
-                variable=self.style_var,
-                value=value,
-                font=FONTS["small"],
-                fg_color=THEME["accent"],
-                hover_color=THEME["accent_hover"]
-            ).pack(anchor="w", pady=4)
+        ctk.CTkLabel(
+            style_frame,
+            text="Style:",
+            font=FONTS["small"],
+            text_color=THEME["text_secondary"]
+        ).pack(anchor="w", pady=(0, 4))
+
+        self.style_var = ctk.StringVar(value="Clean")
+        self.style_dropdown = ctk.CTkComboBox(
+            style_frame,
+            variable=self.style_var,
+            values=style_names,
+            font=FONTS["body"],
+            fg_color=THEME["bg_medium"],
+            border_color=THEME["border"],
+            button_color=THEME["accent"],
+            button_hover_color=THEME["accent_hover"],
+            dropdown_fg_color=THEME["bg_medium"],
+            height=36,
+            state="readonly"
+        )
+        self.style_dropdown.pack(fill="x")
 
         # Refine button
         self.refine_btn = ctk.CTkButton(
@@ -390,16 +406,22 @@ class ClaudeDictateGUI(ctk.CTk):
         """Refine transcribed text with LLM."""
         text = self.raw_editor.get_text()
         if not text.strip():
+            print("[DEBUG] _refine_text: No text to refine")
             return
 
-        style = self.style_var.get()
+        # Convert display name to style code
+        style_display = self.style_var.get()
+        style = self.style_map.get(style_display, "clean")
+        print(f"[DEBUG] _refine_text: Starting refinement with style='{style}' (display: '{style_display}'), text_len={len(text)}")
 
         # Show progress
         self.progress_bar.show()
         self.progress_bar.set_progress(0.2, f"Refining with {style} style...")
 
         def refine():
-            self.app.refine_text(text, style)
+            print(f"[DEBUG] refine thread: Calling app.refine_text()")
+            result = self.app.refine_text(text, style)
+            print(f"[DEBUG] refine thread: app.refine_text returned: {type(result)}, len={len(result) if result else 0}")
             self.after(0, lambda: self.progress_bar.set_progress(1.0, "Done"))
             self.after(500, self.progress_bar.hide)
 
@@ -454,6 +476,9 @@ class ClaudeDictateGUI(ctk.CTk):
         self.app = ClaudeDictate(self.config)
         self._setup_callbacks()
 
+        # Reconnect waveform callback
+        self.app.recorder.on_level_update = self.waveform.update_level
+
         # Rebind hotkey
         self._bind_hotkey()
 
@@ -478,6 +503,7 @@ class ClaudeDictateGUI(ctk.CTk):
 
     def _on_refinement_complete(self, text: str) -> None:
         """Called when refinement is complete."""
+        print(f"[DEBUG] _on_refinement_complete callback fired, text_len={len(text) if text else 0}")
         self.after(0, lambda: self.refined_editor.set_text(text))
 
     def _on_status_update(self, status: str) -> None:

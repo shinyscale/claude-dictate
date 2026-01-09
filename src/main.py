@@ -250,17 +250,24 @@ class ClaudeDictate:
             Refined text
         """
         text = text or self.current_transcription
+        print(f"[main.py] refine_text called: style='{style}', text_len={len(text) if text else 0}")
 
         if not text:
+            print("[main.py] refine_text: No text provided, returning empty")
             return ""
 
         if self.on_status_update:
             self.on_status_update("Refining with LLM...")
 
+        print(f"[main.py] Calling refiner.refine() with {len(text)} chars...")
         self.current_refined = self.refiner.refine(text, style)
+        print(f"[main.py] refiner.refine() returned: {len(self.current_refined) if self.current_refined else 0} chars")
 
         if self.on_refinement_complete:
+            print(f"[main.py] Triggering on_refinement_complete callback")
             self.on_refinement_complete(self.current_refined)
+        else:
+            print(f"[main.py] WARNING: on_refinement_complete callback is None!")
 
         if self.on_status_update:
             self.on_status_update("Ready")
