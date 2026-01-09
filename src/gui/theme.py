@@ -11,6 +11,8 @@ THEME = {
     "accent": "#FF6B35",
     "accent_hover": "#FF8555",
     "accent_secondary": "#4ECDC4",
+    "action_green": "#2E7D32",  # Dark green for action buttons
+    "action_green_hover": "#388E3C",  # Slightly lighter green for hover
     "text_primary": "#FFFFFF",
     "text_secondary": "#A0A0A0",
     "text_muted": "#666666",

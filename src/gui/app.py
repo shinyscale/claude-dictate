@@ -4,7 +4,7 @@ Coordinates all GUI components and app logic.
 """
 
 import threading
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from typing import Optional
 
 import customtkinter as ctk
@@ -214,8 +214,8 @@ class ClaudeDictateGUI(ctk.CTk):
             text="✨ Refine with LLM",
             font=FONTS["body"],
             height=44,
-            fg_color=THEME["accent_secondary"],
-            hover_color="#6EDDD4",
+            fg_color=THEME["action_green"],
+            hover_color=THEME["action_green_hover"],
             command=self._refine_text
         )
         self.refine_btn.pack(fill="x", padx=20, pady=(8, 24))
@@ -287,7 +287,43 @@ class ClaudeDictateGUI(ctk.CTk):
             fg_color=THEME["bg_medium"],
             hover_color=THEME["error"],
             command=self._clear_editors
-        ).pack(fill="x", padx=20, pady=(0, 20))
+        ).pack(fill="x", padx=20, pady=(0, 12))
+
+        # Divider
+        ctk.CTkFrame(parent, fg_color=THEME["border"], height=1).pack(fill="x", padx=20, pady=8)
+
+        # Output directory section
+        ctk.CTkLabel(
+            parent,
+            text="Output Directory",
+            font=FONTS["small"],
+            text_color=THEME["text_secondary"]
+        ).pack(anchor="w", padx=20, pady=(8, 4))
+
+        output_row = ctk.CTkFrame(parent, fg_color="transparent")
+        output_row.pack(fill="x", padx=20, pady=(0, 20))
+
+        self.output_dir_var = ctk.StringVar(value=self.config.get("output_dir", "./outputs"))
+        self.output_dir_entry = ctk.CTkEntry(
+            output_row,
+            textvariable=self.output_dir_var,
+            font=FONTS["small"],
+            fg_color=THEME["bg_medium"],
+            border_color=THEME["border"],
+            height=32
+        )
+        self.output_dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        ctk.CTkButton(
+            output_row,
+            text="📁",
+            font=FONTS["small"],
+            width=36,
+            height=32,
+            fg_color=THEME["action_green"],
+            hover_color=THEME["action_green_hover"],
+            command=self._browse_output_dir
+        ).pack(side="right")
 
     def _create_editor_panel(self, parent) -> None:
         """Create text editor panels."""
@@ -463,6 +499,20 @@ class ClaudeDictateGUI(ctk.CTk):
         self.refined_editor.clear()
         self.status.set_status("Cleared", THEME["text_muted"])
 
+    def _browse_output_dir(self) -> None:
+        """Open directory browser for output directory selection."""
+        current = self.output_dir_var.get() or "./outputs"
+        path = filedialog.askdirectory(
+            initialdir=current,
+            title="Select Output Directory"
+        )
+        if path:
+            self.output_dir_var.set(path)
+            self.config["output_dir"] = path
+            # Update the app's exporter with new output directory
+            if hasattr(self.app, 'exporter'):
+                self.app.exporter.output_dir = path
+
     def _open_settings(self) -> None:
         """Open settings panel."""
         SettingsPanel(self, self.config, self._on_settings_save)
@@ -481,6 +531,10 @@ class ClaudeDictateGUI(ctk.CTk):
 
         # Rebind hotkey
         self._bind_hotkey()
+
+        # Sync output directory to main UI
+        if hasattr(self, 'output_dir_var'):
+            self.output_dir_var.set(self.config.get("output_dir", "./outputs"))
 
     # Callbacks
     def _on_recording_start(self) -> None:

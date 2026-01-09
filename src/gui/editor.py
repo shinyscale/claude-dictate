@@ -75,8 +75,11 @@ class TextEditor(ctk.CTkFrame):
         Args:
             text: Text to display
         """
+        # Ensure textbox is editable before and after setting text
+        self.textbox.configure(state="normal")
         self.textbox.delete("1.0", "end")
         self.textbox.insert("1.0", text)
+        self.textbox.configure(state="normal")  # Keep editable
         self._update_word_count()
 
     def append_text(self, text: str) -> None:
@@ -86,13 +89,17 @@ class TextEditor(ctk.CTkFrame):
         Args:
             text: Text to append
         """
+        self.textbox.configure(state="normal")
         self.textbox.insert("end", text)
         self.textbox.see("end")
+        self.textbox.configure(state="normal")  # Keep editable
         self._update_word_count()
 
     def clear(self) -> None:
         """Clear text content."""
+        self.textbox.configure(state="normal")
         self.textbox.delete("1.0", "end")
+        self.textbox.configure(state="normal")  # Keep editable
         self._update_word_count()
 
     def set_title(self, title: str) -> None:

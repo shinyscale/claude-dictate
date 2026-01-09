@@ -107,7 +107,7 @@ class LLMRefiner:
                         "num_predict": self.max_tokens,
                     }
                 },
-                timeout=60
+                timeout=300  # 5 minutes for large models like 120B
             )
 
             if response.status_code == 200:
@@ -141,7 +141,7 @@ class LLMRefiner:
                     }
                 },
                 stream=True,
-                timeout=120
+                timeout=600  # 10 minutes for large models streaming
             )
 
             if response.status_code == 200:
@@ -180,7 +180,7 @@ class LLMRefiner:
                     "temperature": self.temperature,
                     "max_tokens": self.max_tokens,
                 },
-                timeout=60
+                timeout=300  # 5 minutes for large models
             )
 
             if response.status_code == 200:
@@ -214,7 +214,7 @@ class LLMRefiner:
                     "stream": True,
                 },
                 stream=True,
-                timeout=120
+                timeout=600  # 10 minutes for large models streaming
             )
 
             if response.status_code == 200:

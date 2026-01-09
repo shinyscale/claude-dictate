@@ -139,6 +139,14 @@ class WaveformCanvas(ctk.CTkCanvas):
         if not self.is_active:
             return
 
+        # Schedule update on main thread (callback may come from audio thread)
+        self.after(0, lambda: self._do_update_level(level))
+
+    def _do_update_level(self, level: float) -> None:
+        """Actually update the waveform bars (runs on main thread)."""
+        if not self.is_active:
+            return
+
         # Skip if bars not yet created
         if not self.bars or not self._bars_created:
             return
@@ -159,6 +167,7 @@ class WaveformCanvas(ctk.CTkCanvas):
             y_center = height / 2
 
             self.coords(bar, x1, y_center - bar_height / 2, x2, y_center + bar_height / 2)
+            self.itemconfig(bar, fill=THEME["accent"])  # Make bars visible with accent color
 
 
 class StatusIndicator(ctk.CTkFrame):

@@ -159,8 +159,8 @@ class SettingsPanel(ctk.CTkToplevel):
             font=FONTS["small"],
             width=70,
             height=36,
-            fg_color=THEME["accent_secondary"],
-            hover_color="#6EDDD4",
+            fg_color=THEME["action_green"],
+            hover_color=THEME["action_green_hover"],
             command=self._fetch_ollama_models
         ).pack(side="right")
 
@@ -325,8 +325,8 @@ class SettingsPanel(ctk.CTkToplevel):
             font=FONTS["small"],
             width=70,
             height=36,
-            fg_color=THEME["accent_secondary"],
-            hover_color="#6EDDD4",
+            fg_color=THEME["action_green"],
+            hover_color=THEME["action_green_hover"],
             command=self._refresh_audio_devices
         ).pack(side="right")
 
@@ -391,8 +391,8 @@ class SettingsPanel(ctk.CTkToplevel):
             font=FONTS["small"],
             width=70,
             height=36,
-            fg_color=THEME["accent_secondary"],
-            hover_color="#6EDDD4",
+            fg_color=THEME["action_green"],
+            hover_color=THEME["action_green_hover"],
             command=self._browse_output_dir
         ).pack(side="right")
 
