@@ -74,7 +74,43 @@ class WaveformCanvas(ctk.CTkCanvas):
     def start_animation(self) -> None:
         """Start waveform animation."""
         self.is_active = True
+        # Force bar creation if not done yet
+        if not self._bars_created:
+            self._force_create_bars()
         self._animate()
+
+    def _force_create_bars(self) -> None:
+        """Force synchronous bar creation with fallback dimensions."""
+        # Clear existing bars
+        for bar in self.bars:
+            self.delete(bar)
+        self.bars = []
+
+        # Force geometry calculation
+        self.update_idletasks()
+
+        width = self.winfo_width()
+        height = self.winfo_height()
+
+        # Use fallback dimensions if widget not ready
+        if width < 10:
+            width = 280
+        if height < 10:
+            height = 80
+
+        bar_width = width / self.bar_count
+
+        for i in range(self.bar_count):
+            x = i * bar_width + bar_width / 4
+            bar = self.create_rectangle(
+                x, height / 2 - 2,
+                x + bar_width / 2, height / 2 + 2,
+                fill=THEME["text_muted"],
+                outline=""
+            )
+            self.bars.append(bar)
+
+        self._bars_created = True
 
     def stop_animation(self) -> None:
         """Stop waveform animation."""
@@ -109,6 +145,9 @@ class WaveformCanvas(ctk.CTkCanvas):
 
             self.coords(bar, x1, y_center - bar_height / 2, x2, y_center + bar_height / 2)
             self.itemconfig(bar, fill=THEME["accent"])
+
+        # Force canvas refresh
+        self.update_idletasks()
 
         self.animation_id = self.after(50, self._animate)
 
@@ -168,6 +207,9 @@ class WaveformCanvas(ctk.CTkCanvas):
 
             self.coords(bar, x1, y_center - bar_height / 2, x2, y_center + bar_height / 2)
             self.itemconfig(bar, fill=THEME["accent"])  # Make bars visible with accent color
+
+        # Force canvas refresh
+        self.update_idletasks()
 
 
 class StatusIndicator(ctk.CTkFrame):
