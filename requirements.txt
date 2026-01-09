@@ -1,0 +1,25 @@
+# Claude Dictate - Dependencies
+# Voice-to-Text Tool for Claude Code
+
+# Core audio
+pyaudio>=0.2.13
+
+# Keyboard hotkeys (cross-platform, no root required on macOS)
+pynput>=1.7.6
+
+# Clipboard
+pyperclip>=1.8.2
+
+# HTTP requests for LLM APIs
+requests>=2.31.0
+
+# GUI
+customtkinter>=5.2.0
+
+# Optional: Python whisper fallback (if whisper.cpp not available)
+# Uncomment if needed:
+# openai-whisper>=20231117
+
+# Optional: For better audio handling on some systems
+# sounddevice>=0.4.6
+# soundfile>=0.12.1
