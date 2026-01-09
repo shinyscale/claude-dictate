@@ -24,6 +24,11 @@ DEFAULT_CONFIG = {
     "default_llm": "ollama",
     "default_model": "llama3.2",
     "output_dir": "./outputs",
+    # Window geometry (None means use defaults)
+    "window_width": None,
+    "window_height": None,
+    "window_x": None,
+    "window_y": None,
 }
 
 
@@ -68,6 +73,15 @@ class OutputConfig:
 
 
 @dataclass
+class WindowConfig:
+    """Window geometry configuration."""
+    width: Optional[int] = None
+    height: Optional[int] = None
+    x: Optional[int] = None
+    y: Optional[int] = None
+
+
+@dataclass
 class AppConfig:
     """Main application configuration."""
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
@@ -75,6 +89,7 @@ class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    window: WindowConfig = field(default_factory=WindowConfig)
 
     @classmethod
     def get_config_path(cls) -> Path:
@@ -123,6 +138,7 @@ class AppConfig:
             "llm": asdict(self.llm),
             "hotkey": asdict(self.hotkey),
             "output": asdict(self.output),
+            "window": asdict(self.window),
         }
 
     def to_flat_dict(self) -> dict:
@@ -139,6 +155,10 @@ class AppConfig:
             "default_llm": self.llm.backend,
             "default_model": self.llm.model,
             "output_dir": self.output.output_dir,
+            "window_width": self.window.width,
+            "window_height": self.window.height,
+            "window_x": self.window.x,
+            "window_y": self.window.y,
         }
 
     @classmethod
@@ -147,12 +167,14 @@ class AppConfig:
         # Handle both nested and flat config formats
         if "whisper" in data:
             # Nested format
+            window_data = data.get("window", {})
             return cls(
                 whisper=WhisperConfig(**data.get("whisper", {})),
                 audio=AudioConfig(**data.get("audio", {})),
                 llm=LLMConfig(**data.get("llm", {})),
                 hotkey=HotkeyConfig(**data.get("hotkey", {})),
                 output=OutputConfig(**data.get("output", {})),
+                window=WindowConfig(**window_data) if window_data else WindowConfig(),
             )
         else:
             # Flat format (backwards compatibility)
@@ -177,6 +199,12 @@ class AppConfig:
                 ),
                 output=OutputConfig(
                     output_dir=data.get("output_dir", "./outputs"),
+                ),
+                window=WindowConfig(
+                    width=data.get("window_width"),
+                    height=data.get("window_height"),
+                    x=data.get("window_x"),
+                    y=data.get("window_y"),
                 ),
             )
 

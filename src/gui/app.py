@@ -9,13 +9,13 @@ from typing import Optional
 
 import customtkinter as ctk
 
-from .theme import THEME, FONTS, WINDOW_WIDTH, WINDOW_HEIGHT, LEFT_PANEL_WIDTH
-from .recorder import WaveformCanvas, StatusIndicator, ProgressBar
+from .theme import THEME, FONTS, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT, LEFT_PANEL_WIDTH
+from .recorder import WaveformCanvas, StatusIndicator, ProgressBar, LoadingSpinner, GearSpinner, PulsingIndicator
 from .editor import TextEditor
 from .settings import SettingsPanel
 
 from ..main import ClaudeDictate, HotkeyListener
-from ..config import DEFAULT_CONFIG
+from ..config import DEFAULT_CONFIG, AppConfig
 
 
 class ClaudeDictateGUI(ctk.CTk):
@@ -26,19 +26,27 @@ class ClaudeDictateGUI(ctk.CTk):
 
         # Configure window
         self.title("Claude Dictate")
-        self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
         self.configure(fg_color=THEME["bg_dark"])
 
         # Set appearance
         ctk.set_appearance_mode("dark")
 
+        # Load saved configuration or use defaults
+        self.config = self._load_config()
+
+        # Apply window geometry (saved or defaults)
+        self._apply_window_geometry()
+
+        # Set minimum window size
+        self.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+
         # Initialize app
-        self.config = DEFAULT_CONFIG.copy()
         self.app = ClaudeDictate(self.config)
         self._setup_callbacks()
 
         # State
         self.is_recording = False
+        self.is_refining = False
         self.current_style = "clean"
         self.hotkey_listener: Optional[HotkeyListener] = None
 
@@ -48,6 +56,53 @@ class ClaudeDictateGUI(ctk.CTk):
 
         # Connect waveform to audio level updates
         self.app.recorder.on_level_update = self.waveform.update_level
+
+    def _apply_window_geometry(self) -> None:
+        """Apply saved window geometry or use defaults."""
+        width = self.config.get("window_width") or WINDOW_WIDTH
+        height = self.config.get("window_height") or WINDOW_HEIGHT
+        x = self.config.get("window_x")
+        y = self.config.get("window_y")
+
+        # Validate dimensions
+        width = max(WINDOW_MIN_WIDTH, min(width, self.winfo_screenwidth()))
+        height = max(WINDOW_MIN_HEIGHT, min(height, self.winfo_screenheight()))
+
+        if x is not None and y is not None:
+            # Validate position is on screen
+            screen_width = self.winfo_screenwidth()
+            screen_height = self.winfo_screenheight()
+            x = max(0, min(x, screen_width - 100))
+            y = max(0, min(y, screen_height - 100))
+            self.geometry(f"{width}x{height}+{x}+{y}")
+        else:
+            self.geometry(f"{width}x{height}")
+
+    def _save_window_geometry(self) -> None:
+        """Save current window geometry to config."""
+        try:
+            self.config["window_width"] = self.winfo_width()
+            self.config["window_height"] = self.winfo_height()
+            self.config["window_x"] = self.winfo_x()
+            self.config["window_y"] = self.winfo_y()
+
+            # Persist to disk
+            app_config = AppConfig.from_dict(self.config)
+            app_config.save()
+            print(f"[GUI] Window geometry saved: {self.winfo_width()}x{self.winfo_height()} at ({self.winfo_x()}, {self.winfo_y()})")
+        except Exception as e:
+            print(f"[GUI] Failed to save window geometry: {e}")
+
+    def _load_config(self) -> dict:
+        """Load configuration from disk or use defaults."""
+        try:
+            saved_config = AppConfig.load()
+            config = saved_config.to_flat_dict()
+            print(f"[GUI] Loaded saved configuration from {AppConfig.get_config_path()}")
+            return config
+        except Exception as e:
+            print(f"[GUI] Could not load saved config: {e}, using defaults")
+            return DEFAULT_CONFIG.copy()
 
     def _setup_callbacks(self) -> None:
         """Setup application callbacks."""
@@ -62,20 +117,33 @@ class ClaudeDictateGUI(ctk.CTk):
         # Header
         self._create_header()
 
+        # Export toolbar (always visible)
+        self._create_toolbar()
+
         # Main content
         content = ctk.CTkFrame(self, fg_color="transparent")
         content.pack(fill="both", expand=True, padx=24, pady=(0, 24))
 
-        # Left panel - Recording controls
-        left_panel = ctk.CTkFrame(
+        # Left panel container - fixed width
+        left_container = ctk.CTkFrame(
             content,
             fg_color=THEME["bg_light"],
             corner_radius=12,
             width=LEFT_PANEL_WIDTH
         )
-        left_panel.pack(side="left", fill="y", padx=(0, 16))
-        left_panel.pack_propagate(False)
-        self._create_control_panel(left_panel)
+        left_container.pack(side="left", fill="y", padx=(0, 16))
+        left_container.pack_propagate(False)
+
+        # Scrollable frame inside the left container
+        self.left_scroll = ctk.CTkScrollableFrame(
+            left_container,
+            fg_color="transparent",
+            scrollbar_button_color=THEME["bg_medium"],
+            scrollbar_button_hover_color=THEME["accent"]
+        )
+        self.left_scroll.pack(fill="both", expand=True)
+
+        self._create_control_panel(self.left_scroll)
 
         # Right panel - Text editors
         right_panel = ctk.CTkFrame(content, fg_color="transparent")
@@ -121,6 +189,121 @@ class ClaudeDictateGUI(ctk.CTk):
         # Status indicator
         self.status = StatusIndicator(header)
         self.status.pack(side="right", padx=24)
+
+    def _create_toolbar(self) -> None:
+        """Create export toolbar below header."""
+        toolbar = ctk.CTkFrame(self, fg_color=THEME["bg_light"], height=50, corner_radius=8)
+        toolbar.pack(fill="x", padx=24, pady=(0, 16))
+        toolbar.pack_propagate(False)
+
+        # Left side - Export buttons
+        export_frame = ctk.CTkFrame(toolbar, fg_color="transparent")
+        export_frame.pack(side="left", fill="y", padx=12)
+
+        ctk.CTkLabel(
+            export_frame,
+            text="Export:",
+            font=FONTS["small"],
+            text_color=THEME["text_secondary"]
+        ).pack(side="left", padx=(0, 8))
+
+        # Copy button
+        ctk.CTkButton(
+            export_frame,
+            text="📋 Copy",
+            font=FONTS["small"],
+            width=75,
+            height=34,
+            fg_color=THEME["bg_medium"],
+            hover_color=THEME["bg_dark"],
+            command=self._copy_to_clipboard
+        ).pack(side="left", padx=4)
+
+        # Save as .md
+        ctk.CTkButton(
+            export_frame,
+            text="📝 .md",
+            font=FONTS["small"],
+            width=70,
+            height=34,
+            fg_color=THEME["bg_medium"],
+            hover_color=THEME["bg_dark"],
+            command=self._save_markdown
+        ).pack(side="left", padx=4)
+
+        # Save as .prd
+        ctk.CTkButton(
+            export_frame,
+            text="📄 .prd",
+            font=FONTS["small"],
+            width=70,
+            height=34,
+            fg_color=THEME["bg_medium"],
+            hover_color=THEME["bg_dark"],
+            command=self._save_prd
+        ).pack(side="left", padx=4)
+
+        # Save as Prompt
+        ctk.CTkButton(
+            export_frame,
+            text="🚀 Prompt",
+            font=FONTS["small"],
+            width=90,
+            height=34,
+            fg_color=THEME["bg_medium"],
+            hover_color=THEME["bg_dark"],
+            command=self._save_prompt
+        ).pack(side="left", padx=4)
+
+        # Right side - Output directory and Clear
+        right_frame = ctk.CTkFrame(toolbar, fg_color="transparent")
+        right_frame.pack(side="right", fill="y", padx=12)
+
+        # Clear button
+        ctk.CTkButton(
+            right_frame,
+            text="🗑️",
+            font=FONTS["small"],
+            width=40,
+            height=34,
+            fg_color=THEME["bg_medium"],
+            hover_color=THEME["error"],
+            command=self._clear_editors
+        ).pack(side="right", padx=(8, 0))
+
+        # Output directory browse button
+        ctk.CTkButton(
+            right_frame,
+            text="📁",
+            font=FONTS["small"],
+            width=40,
+            height=34,
+            fg_color=THEME["action_green"],
+            hover_color=THEME["action_green_hover"],
+            command=self._browse_output_dir
+        ).pack(side="right")
+
+        # Output directory entry
+        self.output_dir_var = ctk.StringVar(value=self.config.get("output_dir", "./outputs"))
+        self.output_dir_entry = ctk.CTkEntry(
+            right_frame,
+            textvariable=self.output_dir_var,
+            font=FONTS["small"],
+            fg_color=THEME["bg_medium"],
+            border_color=THEME["border"],
+            width=180,
+            height=34,
+            placeholder_text="Output directory..."
+        )
+        self.output_dir_entry.pack(side="right", padx=(0, 4))
+
+        # Output label
+        ctk.CTkLabel(
+            right_frame,
+            text="Save to:",
+            font=FONTS["small"],
+            text_color=THEME["text_secondary"]
+        ).pack(side="right", padx=(0, 4))
 
     def _create_control_panel(self, parent) -> None:
         """Create recording control panel."""
@@ -218,112 +401,26 @@ class ClaudeDictateGUI(ctk.CTk):
             hover_color=THEME["action_green_hover"],
             command=self._refine_text
         )
-        self.refine_btn.pack(fill="x", padx=20, pady=(8, 24))
+        self.refine_btn.pack(fill="x", padx=20, pady=(8, 4))
 
-        # Divider
-        ctk.CTkFrame(parent, fg_color=THEME["border"], height=1).pack(fill="x", padx=20, pady=8)
-
-        # Export options
-        ctk.CTkLabel(
+        # Model info display
+        model_backend = self.config.get("default_llm", "ollama")
+        model_name = self.config.get("default_model", "llama3.2")
+        self.model_label = ctk.CTkLabel(
             parent,
-            text="Export",
-            font=FONTS["heading"],
-            text_color=THEME["text_primary"]
-        ).pack(anchor="w", padx=20, pady=(16, 12))
-
-        export_btns = ctk.CTkFrame(parent, fg_color="transparent")
-        export_btns.pack(fill="x", padx=20)
-
-        ctk.CTkButton(
-            export_btns,
-            text="📋 Copy",
+            text=f"Model: {model_backend}/{model_name}",
             font=FONTS["small"],
-            width=85,
-            height=36,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["bg_dark"],
-            command=self._copy_to_clipboard
-        ).pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            export_btns,
-            text="📝 .md",
-            font=FONTS["small"],
-            width=85,
-            height=36,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["bg_dark"],
-            command=self._save_markdown
-        ).pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            export_btns,
-            text="📄 .prd",
-            font=FONTS["small"],
-            width=85,
-            height=36,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["bg_dark"],
-            command=self._save_prd
-        ).pack(side="left")
-
-        # Prompt button
-        ctk.CTkButton(
-            parent,
-            text="🚀 Save as Claude Code Prompt",
-            font=FONTS["small"],
-            height=36,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["bg_dark"],
-            command=self._save_prompt
-        ).pack(fill="x", padx=20, pady=(12, 8))
-
-        # Clear button
-        ctk.CTkButton(
-            parent,
-            text="🗑️ Clear All",
-            font=FONTS["small"],
-            height=36,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["error"],
-            command=self._clear_editors
-        ).pack(fill="x", padx=20, pady=(0, 12))
-
-        # Divider
-        ctk.CTkFrame(parent, fg_color=THEME["border"], height=1).pack(fill="x", padx=20, pady=8)
-
-        # Output directory section
-        ctk.CTkLabel(
-            parent,
-            text="Output Directory",
-            font=FONTS["small"],
-            text_color=THEME["text_secondary"]
-        ).pack(anchor="w", padx=20, pady=(8, 4))
-
-        output_row = ctk.CTkFrame(parent, fg_color="transparent")
-        output_row.pack(fill="x", padx=20, pady=(0, 20))
-
-        self.output_dir_var = ctk.StringVar(value=self.config.get("output_dir", "./outputs"))
-        self.output_dir_entry = ctk.CTkEntry(
-            output_row,
-            textvariable=self.output_dir_var,
-            font=FONTS["small"],
-            fg_color=THEME["bg_medium"],
-            border_color=THEME["border"],
-            height=32
+            text_color=THEME["text_muted"]
         )
-        self.output_dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.model_label.pack(anchor="w", padx=20, pady=(2, 4))
 
-        ctk.CTkButton(
-            output_row,
-            text="📁",
-            font=FONTS["small"],
-            width=36,
-            height=32,
-            fg_color=THEME["action_green"],
-            hover_color=THEME["action_green_hover"],
-            command=self._browse_output_dir
-        ).pack(side="right")
+        # Spinner container frame - always in layout, content shown/hidden
+        self.spinner_container = ctk.CTkFrame(parent, fg_color="transparent", height=30)
+        self.spinner_container.pack(fill="x", padx=20, pady=(0, 12))
+
+        # Gear spinner for refinement (inside container, hidden by default)
+        self.refine_spinner = GearSpinner(self.spinner_container)
+        # Don't pack initially - will be shown when refining
 
     def _create_editor_panel(self, parent) -> None:
         """Create text editor panels."""
@@ -440,17 +537,27 @@ class ClaudeDictateGUI(ctk.CTk):
 
     def _refine_text(self) -> None:
         """Refine transcribed text with LLM."""
+        if self.is_refining:
+            return
+
         text = self.raw_editor.get_text()
         if not text.strip():
             print("[DEBUG] _refine_text: No text to refine")
             return
+
+        self.is_refining = True
 
         # Convert display name to style code
         style_display = self.style_var.get()
         style = self.style_map.get(style_display, "clean")
         print(f"[DEBUG] _refine_text: Starting refinement with style='{style}' (display: '{style_display}'), text_len={len(text)}")
 
-        # Show progress
+        # Show gear spinner animation inside container
+        self.refine_spinner.pack(fill="x", expand=True)
+        self.refine_spinner.start(f"Refining... ({len(text)} chars)")
+        self.refine_btn.configure(state="disabled", text="⏳ Refining...")
+
+        # Show progress bar too
         self.progress_bar.show()
         self.progress_bar.set_progress(0.2, f"Refining with {style} style...")
 
@@ -458,10 +565,18 @@ class ClaudeDictateGUI(ctk.CTk):
             print(f"[DEBUG] refine thread: Calling app.refine_text()")
             result = self.app.refine_text(text, style)
             print(f"[DEBUG] refine thread: app.refine_text returned: {type(result)}, len={len(result) if result else 0}")
-            self.after(0, lambda: self.progress_bar.set_progress(1.0, "Done"))
-            self.after(500, self.progress_bar.hide)
+            self.after(0, self._on_refine_complete)
 
         threading.Thread(target=refine, daemon=True).start()
+
+    def _on_refine_complete(self) -> None:
+        """Called when refinement is complete - hide animations."""
+        self.is_refining = False
+        self.refine_spinner.stop()
+        self.refine_spinner.pack_forget()
+        self.refine_btn.configure(state="normal", text="✨ Refine with LLM")
+        self.progress_bar.set_progress(1.0, "Done")
+        self.after(500, self.progress_bar.hide)
 
     def _copy_to_clipboard(self) -> None:
         """Copy refined or raw text to clipboard."""
@@ -536,6 +651,12 @@ class ClaudeDictateGUI(ctk.CTk):
         if hasattr(self, 'output_dir_var'):
             self.output_dir_var.set(self.config.get("output_dir", "./outputs"))
 
+        # Update model label
+        if hasattr(self, 'model_label'):
+            model_backend = self.config.get("default_llm", "ollama")
+            model_name = self.config.get("default_model", "llama3.2")
+            self.model_label.configure(text=f"Model: {model_backend}/{model_name}")
+
     # Callbacks
     def _on_recording_start(self) -> None:
         """Called when recording starts."""
@@ -566,6 +687,9 @@ class ClaudeDictateGUI(ctk.CTk):
 
     def on_closing(self) -> None:
         """Handle window close."""
+        # Save window geometry before closing
+        self._save_window_geometry()
+
         self.app.cleanup()
         if self.hotkey_listener:
             self.hotkey_listener.stop()

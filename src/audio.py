@@ -127,7 +127,8 @@ class AudioRecorder:
         rms = (sum_squares / count) ** 0.5
 
         # Normalize to 0.0-1.0 (max 16-bit value is 32768)
-        level = min(1.0, rms / 32768.0 * 5)  # Amplify for better visualization
+        # Use 15x amplification for better visualization of typical speech levels
+        level = min(1.0, rms / 32768.0 * 15)
         return level
 
     def stop_recording(self) -> Optional[str]:

@@ -4,6 +4,7 @@ Waveform visualization and status indicator widgets.
 """
 
 import random
+import tkinter as tk
 from typing import Optional
 
 import customtkinter as ctk
@@ -11,59 +12,72 @@ import customtkinter as ctk
 from .theme import THEME, FONTS
 
 
-class WaveformCanvas(ctk.CTkCanvas):
+class WaveformCanvas(ctk.CTkFrame):
     """Animated waveform visualization for recording."""
 
-    def __init__(self, master, bar_count: int = 40, **kwargs):
+    def __init__(self, master, bar_count: int = 32, **kwargs):
         """
         Initialize waveform canvas.
 
         Args:
             master: Parent widget
             bar_count: Number of bars in the waveform
-            **kwargs: Additional canvas arguments
+            **kwargs: Additional frame arguments
         """
-        super().__init__(
-            master,
-            bg=THEME["bg_medium"],
-            highlightthickness=0,
-            **kwargs
-        )
+        # Extract height for the canvas, default to 80
+        canvas_height = kwargs.pop('height', 80)
+
+        super().__init__(master, fg_color=THEME["bg_medium"], corner_radius=8, **kwargs)
+
         self.is_active = False
+        self.receiving_audio = False  # True when audio level callbacks are being received
         self.bars = []
         self.bar_count = bar_count
         self.animation_id: Optional[str] = None
         self._bars_created = False
-        # Delay bar creation until widget is mapped
-        self.bind("<Map>", self._on_map)
+        self._canvas_height = canvas_height
 
-    def _on_map(self, event=None) -> None:
-        """Called when widget is mapped/visible."""
-        if not self._bars_created:
-            self.after(100, self._create_bars)
+        # Create a standard tkinter canvas inside the frame
+        self.canvas = tk.Canvas(
+            self,
+            bg=THEME["bg_medium"],
+            highlightthickness=0,
+            height=canvas_height
+        )
+        self.canvas.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Bind to configure event for resize handling
+        self.canvas.bind("<Configure>", self._on_configure)
+
+    def _on_configure(self, event=None) -> None:
+        """Handle canvas resize."""
+        # Recreate bars when canvas size changes
+        self.after(50, self._create_bars)
 
     def _create_bars(self) -> None:
         """Create waveform bars."""
         # Clear existing bars
-        for bar in self.bars:
-            self.delete(bar)
+        self.canvas.delete("all")
         self.bars = []
 
-        width = self.winfo_width()
-        height = self.winfo_height()
+        width = self.canvas.winfo_width()
+        height = self.canvas.winfo_height()
 
-        if width < 10 or height < 10:
-            # Widget not ready yet, try again later
-            self.after(100, self._create_bars)
-            return
+        # Use minimum dimensions if not ready
+        if width < 20:
+            width = 280
+        if height < 20:
+            height = self._canvas_height
 
-        bar_width = width / self.bar_count
+        bar_width = max(4, width / self.bar_count)
+        gap = 2
 
         for i in range(self.bar_count):
-            x = i * bar_width + bar_width / 4
-            bar = self.create_rectangle(
+            x = i * bar_width + gap
+            # Create thin bar in center (idle state)
+            bar = self.canvas.create_rectangle(
                 x, height / 2 - 2,
-                x + bar_width / 2, height / 2 + 2,
+                x + bar_width - gap * 2, height / 2 + 2,
                 fill=THEME["text_muted"],
                 outline=""
             )
@@ -72,105 +86,74 @@ class WaveformCanvas(ctk.CTkCanvas):
         self._bars_created = True
 
     def start_animation(self) -> None:
-        """Start waveform animation."""
+        """Start waveform - waits for real audio, no random animation."""
+        print("[Waveform] Ready for audio input")
         self.is_active = True
-        # Force bar creation if not done yet
-        if not self._bars_created:
-            self._force_create_bars()
-        self._animate()
-
-    def _force_create_bars(self) -> None:
-        """Force synchronous bar creation with fallback dimensions."""
-        # Clear existing bars
-        for bar in self.bars:
-            self.delete(bar)
-        self.bars = []
-
-        # Force geometry calculation
-        self.update_idletasks()
-
-        width = self.winfo_width()
-        height = self.winfo_height()
-
-        # Use fallback dimensions if widget not ready
-        if width < 10:
-            width = 280
-        if height < 10:
-            height = 80
-
-        bar_width = width / self.bar_count
-
-        for i in range(self.bar_count):
-            x = i * bar_width + bar_width / 4
-            bar = self.create_rectangle(
-                x, height / 2 - 2,
-                x + bar_width / 2, height / 2 + 2,
-                fill=THEME["text_muted"],
-                outline=""
-            )
-            self.bars.append(bar)
-
-        self._bars_created = True
+        self.receiving_audio = False  # Will be set True when audio callback fires
+        # Ensure bars exist
+        if not self._bars_created or not self.bars:
+            self._create_bars()
+        # Show "waiting" state - slightly elevated bars in accent color to indicate active
+        self._show_waiting_state()
 
     def stop_animation(self) -> None:
         """Stop waveform animation."""
+        print("[Waveform] Stopping animation")
         self.is_active = False
+        self.receiving_audio = False
         if self.animation_id:
             self.after_cancel(self.animation_id)
             self.animation_id = None
         self._reset_bars()
 
-    def _animate(self) -> None:
-        """Animate waveform bars."""
-        if not self.is_active:
-            return
-
-        # Skip if bars not yet created
+    def _show_waiting_state(self) -> None:
+        """Show visual indication that waveform is ready and waiting for audio."""
         if not self.bars or not self._bars_created:
-            self.animation_id = self.after(50, self._animate)
             return
 
-        height = self.winfo_height() or 60
+        try:
+            height = self.canvas.winfo_height()
+            if height < 20:
+                height = self._canvas_height
 
-        for i, bar in enumerate(self.bars):
-            # Generate pseudo-random height based on position
-            amplitude = random.uniform(0.1, 1.0)
-            bar_height = int(amplitude * (height * 0.8))
+            # Show small elevated bars in accent color to indicate "active/waiting"
+            for bar in self.bars:
+                coords = self.canvas.coords(bar)
+                if not coords or len(coords) < 4:
+                    continue
+                x1, _, x2, _ = coords
+                y_center = height / 2
+                bar_height = 8  # Small but visible
 
-            coords = self.coords(bar)
-            if not coords or len(coords) < 4:
-                continue  # Skip invalid bar
-            x1, _, x2, _ = coords
-            y_center = height / 2
-
-            self.coords(bar, x1, y_center - bar_height / 2, x2, y_center + bar_height / 2)
-            self.itemconfig(bar, fill=THEME["accent"])
-
-        # Force canvas refresh
-        self.update_idletasks()
-
-        self.animation_id = self.after(50, self._animate)
+                self.canvas.coords(bar, x1, y_center - bar_height / 2, x2, y_center + bar_height / 2)
+                self.canvas.itemconfig(bar, fill=THEME["accent_secondary"])  # Teal to indicate waiting
+        except Exception as e:
+            print(f"[Waveform] Waiting state error: {e}")
 
     def _reset_bars(self) -> None:
         """Reset bars to idle state."""
-        # Skip if bars not yet created
         if not self.bars or not self._bars_created:
             return
 
-        height = self.winfo_height() or 60
+        try:
+            height = self.canvas.winfo_height()
+            if height < 20:
+                height = self._canvas_height
 
-        for bar in self.bars:
-            coords = self.coords(bar)
-            if not coords or len(coords) < 4:
-                continue  # Skip invalid bar
-            x1, _, x2, _ = coords
-            y_center = height / 2
-            self.coords(bar, x1, y_center - 2, x2, y_center + 2)
-            self.itemconfig(bar, fill=THEME["text_muted"])
+            for bar in self.bars:
+                coords = self.canvas.coords(bar)
+                if not coords or len(coords) < 4:
+                    continue
+                x1, _, x2, _ = coords
+                y_center = height / 2
+                self.canvas.coords(bar, x1, y_center - 2, x2, y_center + 2)
+                self.canvas.itemconfig(bar, fill=THEME["text_muted"])
+        except Exception as e:
+            print(f"[Waveform] Reset error: {e}")
 
     def update_level(self, level: float) -> None:
         """
-        Update waveform based on audio level.
+        Update waveform based on audio level from microphone.
 
         Args:
             level: Audio level (0.0-1.0)
@@ -178,38 +161,59 @@ class WaveformCanvas(ctk.CTkCanvas):
         if not self.is_active:
             return
 
+        # First audio callback - switch from random to audio-driven animation
+        if not self.receiving_audio:
+            self.receiving_audio = True
+            # Cancel any pending random animation
+            if self.animation_id:
+                self.after_cancel(self.animation_id)
+                self.animation_id = None
+            print("[Waveform] Switched to audio-driven mode")
+
         # Schedule update on main thread (callback may come from audio thread)
         self.after(0, lambda: self._do_update_level(level))
 
     def _do_update_level(self, level: float) -> None:
-        """Actually update the waveform bars (runs on main thread)."""
+        """Actually update the waveform bars based on audio level."""
         if not self.is_active:
             return
 
-        # Skip if bars not yet created
         if not self.bars or not self._bars_created:
             return
 
-        height = self.winfo_height() or 60
+        try:
+            height = self.canvas.winfo_height()
+            if height < 20:
+                height = self._canvas_height
 
-        for i, bar in enumerate(self.bars):
-            # Add some variation based on position
-            variation = random.uniform(0.7, 1.3)
-            amplitude = level * variation
-            bar_height = int(amplitude * (height * 0.8))
-            bar_height = max(4, min(bar_height, height * 0.9))
+            for i, bar in enumerate(self.bars):
+                # Add slight variation per bar for visual interest, but based on actual audio level
+                variation = random.uniform(0.8, 1.2)
+                # Boost amplitude for more visible response (square root for better low-level visibility)
+                boosted_level = (level ** 0.6) * 1.5  # Non-linear boost for sensitivity
+                amplitude = max(0.08, boosted_level * variation)
+                bar_height = max(4, int(amplitude * (height * 0.95)))
 
-            coords = self.coords(bar)
-            if not coords or len(coords) < 4:
-                continue  # Skip invalid bar
-            x1, _, x2, _ = coords
-            y_center = height / 2
+                coords = self.canvas.coords(bar)
+                if not coords or len(coords) < 4:
+                    continue
+                x1, _, x2, _ = coords
+                y_center = height / 2
 
-            self.coords(bar, x1, y_center - bar_height / 2, x2, y_center + bar_height / 2)
-            self.itemconfig(bar, fill=THEME["accent"])  # Make bars visible with accent color
-
-        # Force canvas refresh
-        self.update_idletasks()
+                self.canvas.coords(
+                    bar,
+                    x1, y_center - bar_height / 2,
+                    x2, y_center + bar_height / 2
+                )
+                # Color based on intensity - brighter orange for louder audio
+                if level > 0.3:
+                    self.canvas.itemconfig(bar, fill=THEME["accent"])
+                elif level > 0.1:
+                    self.canvas.itemconfig(bar, fill=THEME["accent_secondary"])
+                else:
+                    self.canvas.itemconfig(bar, fill=THEME["text_secondary"])
+        except Exception as e:
+            print(f"[Waveform] Level update error: {e}")
 
 
 class StatusIndicator(ctk.CTkFrame):
@@ -265,6 +269,242 @@ class StatusIndicator(ctk.CTkFrame):
             self.dot.configure(text_color=THEME["error"])
         else:
             self.dot.configure(text_color=THEME["text_muted"])
+
+
+class LoadingSpinner(ctk.CTkFrame):
+    """Animated loading spinner with status text."""
+
+    def __init__(self, master, **kwargs):
+        """
+        Initialize loading spinner.
+
+        Args:
+            master: Parent widget
+            **kwargs: Additional frame arguments
+        """
+        super().__init__(master, fg_color="transparent", **kwargs)
+
+        self.is_spinning = False
+        self.animation_id = None
+        self.spinner_chars = ["◐", "◓", "◑", "◒"]
+        self.current_frame = 0
+
+        # Spinner label
+        self.spinner_label = ctk.CTkLabel(
+            self,
+            text="◐",
+            font=("SF Pro Display", 24),
+            text_color=THEME["accent"]
+        )
+        self.spinner_label.pack(side="left", padx=(0, 8))
+
+        # Status text
+        self.status_label = ctk.CTkLabel(
+            self,
+            text="Loading...",
+            font=FONTS["body"],
+            text_color=THEME["text_secondary"]
+        )
+        self.status_label.pack(side="left")
+
+        # Character/token count
+        self.count_label = ctk.CTkLabel(
+            self,
+            text="",
+            font=FONTS["small"],
+            text_color=THEME["text_muted"]
+        )
+        self.count_label.pack(side="right")
+
+    def start(self, text: str = "Loading...") -> None:
+        """Start spinner animation."""
+        self.status_label.configure(text=text)
+        self.count_label.configure(text="")
+        self.is_spinning = True
+        self._animate()
+
+    def stop(self) -> None:
+        """Stop spinner animation."""
+        self.is_spinning = False
+        if self.animation_id:
+            self.after_cancel(self.animation_id)
+            self.animation_id = None
+
+    def set_text(self, text: str) -> None:
+        """Update the status text."""
+        self.status_label.configure(text=text)
+
+    def set_count(self, count_text: str) -> None:
+        """Update the character/token count display."""
+        self.count_label.configure(text=count_text)
+
+    def _animate(self) -> None:
+        """Animate the spinner."""
+        if not self.is_spinning:
+            return
+
+        self.current_frame = (self.current_frame + 1) % len(self.spinner_chars)
+        self.spinner_label.configure(text=self.spinner_chars[self.current_frame])
+
+        self.animation_id = self.after(100, self._animate)
+
+
+class PulsingIndicator(ctk.CTkFrame):
+    """Pulsing animation indicator for inference progress."""
+
+    def __init__(self, master, bar_count: int = 5, **kwargs):
+        """
+        Initialize pulsing indicator.
+
+        Args:
+            master: Parent widget
+            bar_count: Number of pulsing bars
+            **kwargs: Additional frame arguments
+        """
+        super().__init__(master, fg_color="transparent", **kwargs)
+
+        self.is_pulsing = False
+        self.animation_id = None
+        self.bars = []
+        self.bar_count = bar_count
+        self.current_phase = 0
+
+        # Create bars
+        for i in range(bar_count):
+            bar = ctk.CTkLabel(
+                self,
+                text="▮",
+                font=("SF Pro Display", 16),
+                text_color=THEME["text_muted"]
+            )
+            bar.pack(side="left", padx=2)
+            self.bars.append(bar)
+
+        # Status text
+        self.status_label = ctk.CTkLabel(
+            self,
+            text="",
+            font=FONTS["small"],
+            text_color=THEME["text_secondary"]
+        )
+        self.status_label.pack(side="left", padx=(12, 0))
+
+    def start(self, text: str = "Processing...") -> None:
+        """Start pulsing animation."""
+        self.status_label.configure(text=text)
+        self.is_pulsing = True
+        self._animate()
+
+    def stop(self) -> None:
+        """Stop pulsing animation."""
+        self.is_pulsing = False
+        if self.animation_id:
+            self.after_cancel(self.animation_id)
+            self.animation_id = None
+        # Reset all bars to muted
+        for bar in self.bars:
+            bar.configure(text_color=THEME["text_muted"])
+
+    def set_text(self, text: str) -> None:
+        """Update the status text."""
+        self.status_label.configure(text=text)
+
+    def _animate(self) -> None:
+        """Animate the pulsing bars."""
+        if not self.is_pulsing:
+            return
+
+        # Create wave effect
+        for i, bar in enumerate(self.bars):
+            # Calculate distance from current phase
+            dist = abs((self.current_phase % self.bar_count) - i)
+            if dist > self.bar_count // 2:
+                dist = self.bar_count - dist
+
+            if dist == 0:
+                bar.configure(text_color=THEME["accent"])
+            elif dist == 1:
+                bar.configure(text_color=THEME["accent_secondary"])
+            else:
+                bar.configure(text_color=THEME["text_muted"])
+
+        self.current_phase = (self.current_phase + 1) % self.bar_count
+
+        self.animation_id = self.after(150, self._animate)
+
+
+class GearSpinner(ctk.CTkFrame):
+    """Animated spinner for refinement with rotating indicator."""
+
+    def __init__(self, master, **kwargs):
+        """
+        Initialize gear spinner.
+
+        Args:
+            master: Parent widget
+            **kwargs: Additional frame arguments
+        """
+        super().__init__(master, fg_color="transparent", **kwargs)
+
+        self.is_spinning = False
+        self.animation_id = None
+        # Use rotating characters for visible animation
+        self.spinner_chars = ["◐", "◓", "◑", "◒"]
+        self.current_frame = 0
+
+        # Spinner label with larger, more visible font
+        self.spinner_label = ctk.CTkLabel(
+            self,
+            text="⚙",
+            font=("SF Pro Display", 20),
+            text_color=THEME["accent"]
+        )
+        self.spinner_label.pack(side="left", padx=(0, 8))
+
+        # Status text
+        self.status_label = ctk.CTkLabel(
+            self,
+            text="",
+            font=FONTS["body"],
+            text_color=THEME["text_secondary"]
+        )
+        self.status_label.pack(side="left")
+
+    def start(self, text: str = "Refining...") -> None:
+        """Start spinner animation."""
+        print(f"[GearSpinner] Starting animation: {text}")
+        self.status_label.configure(text=text)
+        self.is_spinning = True
+        self.current_frame = 0
+        self._animate()
+
+    def stop(self) -> None:
+        """Stop spinner animation."""
+        print("[GearSpinner] Stopping animation")
+        self.is_spinning = False
+        if self.animation_id:
+            self.after_cancel(self.animation_id)
+            self.animation_id = None
+        self.spinner_label.configure(text="⚙", text_color=THEME["text_muted"])
+
+    def set_text(self, text: str) -> None:
+        """Update the status text."""
+        self.status_label.configure(text=text)
+
+    def _animate(self) -> None:
+        """Animate the spinner with rotating characters."""
+        if not self.is_spinning:
+            return
+
+        # Update spinner character
+        self.spinner_label.configure(
+            text=self.spinner_chars[self.current_frame],
+            text_color=THEME["accent"]
+        )
+        self.current_frame = (self.current_frame + 1) % len(self.spinner_chars)
+
+        # Schedule next frame (8fps for visible rotation)
+        self.animation_id = self.after(125, self._animate)
 
 
 class ProgressBar(ctk.CTkFrame):
