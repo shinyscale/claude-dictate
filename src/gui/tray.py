@@ -82,6 +82,7 @@ class SystemTray:
         self.on_exit = on_exit
         self.icon: Optional["pystray.Icon"] = None
         self._running = False
+        self._ready = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def _create_menu(self) -> "pystray.Menu":
@@ -135,6 +136,7 @@ class SystemTray:
             return False
 
         if self._running:
+            print("[Tray] Already running")
             return True
 
         try:
@@ -148,23 +150,38 @@ class SystemTray:
                 menu=menu
             )
 
-            # Run in background thread
+            # Run in background thread with setup callback
             self._running = True
+            self._ready = threading.Event()
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
 
-            print("[Tray] System tray icon started")
+            # Wait for tray to be ready (up to 2 seconds)
+            if self._ready.wait(timeout=2.0):
+                print("[Tray] System tray icon started and ready")
+            else:
+                print("[Tray] System tray icon started (ready state unknown)")
+
             return True
 
         except Exception as e:
             print(f"[Tray] Failed to start system tray: {e}")
+            import traceback
+            traceback.print_exc()
             self._running = False
             return False
 
     def _run(self) -> None:
         """Run the tray icon (blocking)."""
         if self.icon:
-            self.icon.run()
+            # Use setup callback to signal readiness
+            self.icon.run(setup=self._on_setup)
+
+    def _on_setup(self, icon) -> None:
+        """Called when tray icon is ready."""
+        print("[Tray] Icon setup complete, tray is visible")
+        if hasattr(self, '_ready'):
+            self._ready.set()
 
     def stop(self) -> None:
         """Stop the system tray icon."""

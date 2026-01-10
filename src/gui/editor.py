@@ -4,12 +4,13 @@ Displays and allows editing of transcribed/refined text.
 """
 
 import customtkinter as ctk
+import pyperclip
 
 from .theme import THEME, FONTS
 
 
 class TextEditor(ctk.CTkFrame):
-    """Text editor panel with header."""
+    """Text editor panel with header and hover copy button."""
 
     def __init__(self, master, title: str, **kwargs):
         """
@@ -39,6 +40,22 @@ class TextEditor(ctk.CTkFrame):
         )
         self.title_label.pack(side="left")
 
+        # Copy button (hidden by default, shown on hover)
+        self.copy_btn = ctk.CTkButton(
+            header,
+            text="📋",
+            font=("", 14),
+            width=32,
+            height=28,
+            fg_color="transparent",
+            hover_color=THEME["bg_medium"],
+            text_color=THEME["text_muted"],
+            corner_radius=6,
+            command=self._copy_to_clipboard
+        )
+        # Initially hidden - pack_forget() isn't needed since we haven't packed it yet
+        self._copy_btn_visible = False
+
         # Word count label
         self.word_count_label = ctk.CTkLabel(
             header,
@@ -63,6 +80,51 @@ class TextEditor(ctk.CTkFrame):
 
         # Bind text change for word count
         self.textbox.bind("<KeyRelease>", self._update_word_count)
+
+        # Bind hover events for copy button visibility
+        self.bind("<Enter>", self._on_mouse_enter)
+        self.bind("<Leave>", self._on_mouse_leave)
+        self.textbox.bind("<Enter>", self._on_mouse_enter)
+        self.textbox.bind("<Leave>", self._on_mouse_leave)
+        header.bind("<Enter>", self._on_mouse_enter)
+        header.bind("<Leave>", self._on_mouse_leave)
+
+    def _on_mouse_enter(self, event=None) -> None:
+        """Show copy button when mouse enters the editor."""
+        if not self._copy_btn_visible and self.get_text().strip():
+            self.copy_btn.pack(side="right", padx=(0, 8))
+            self._copy_btn_visible = True
+
+    def _on_mouse_leave(self, event=None) -> None:
+        """Hide copy button when mouse leaves the editor."""
+        # Check if mouse is still within the widget bounds
+        try:
+            x, y = self.winfo_pointerxy()
+            widget_x = self.winfo_rootx()
+            widget_y = self.winfo_rooty()
+            widget_w = self.winfo_width()
+            widget_h = self.winfo_height()
+
+            # Only hide if mouse is actually outside the widget
+            if not (widget_x <= x <= widget_x + widget_w and
+                    widget_y <= y <= widget_y + widget_h):
+                if self._copy_btn_visible:
+                    self.copy_btn.pack_forget()
+                    self._copy_btn_visible = False
+        except Exception:
+            pass
+
+    def _copy_to_clipboard(self) -> None:
+        """Copy text content to clipboard."""
+        text = self.get_text()
+        if text.strip():
+            pyperclip.copy(text)
+            # Flash the button to indicate success
+            original_color = self.copy_btn.cget("text_color")
+            self.copy_btn.configure(text="✓", text_color=THEME["success"])
+            self.after(800, lambda: self.copy_btn.configure(
+                text="📋", text_color=original_color
+            ))
 
     def get_text(self) -> str:
         """Get text content."""

@@ -809,17 +809,32 @@ class ClaudeDictateGUI(ctk.CTk):
 
     def _hide_to_tray(self) -> None:
         """Hide window to system tray."""
-        if not self.system_tray or not is_tray_available():
+        print("[GUI] _hide_to_tray called")
+
+        if not is_tray_available():
+            print("[GUI] Tray not available, cannot hide to tray")
+            return
+
+        if not self.system_tray:
+            print("[GUI] SystemTray object not created, initializing now")
+            self._init_system_tray()
+
+        if not self.system_tray:
+            print("[GUI] Failed to create SystemTray")
             return
 
         # Ensure tray is running
         if not self.system_tray.is_running:
-            self.system_tray.start()
+            print("[GUI] Starting system tray...")
+            success = self.system_tray.start()
+            if not success:
+                print("[GUI] Failed to start system tray")
+                return
 
         self._is_hidden_to_tray = True
         self._save_window_geometry()
         self.withdraw()
-        print("[GUI] Window hidden to tray")
+        print("[GUI] Window hidden to tray successfully")
 
     def _exit_app(self) -> None:
         """Exit the application completely."""
