@@ -1,0 +1,111 @@
+**Product Requirements Document (PRD)**  
+
+---
+
+### 1. Waveform Animation  
+**User Story**  
+As a user of Claude Dictate, I want the audio waveform to animate in real‑time while I speak, so I can see visual feedback that my voice is being captured.  
+
+**Acceptance Criteria**  
+- The waveform updates continuously during voice input without lag.  
+- Animation starts when recording begins and stops when recording ends.  
+- No visual artifacts or freezes occur on supported platforms (Windows 10+, macOS 12+).  
+
+**Technical Constraints**  
+- Must use the existing rendering pipeline; no third‑party graphics library may be added.  
+- Animation must run at ≥30 fps on default hardware configurations.  
+
+---
+
+### 2. Settings Persistence  
+**User Story**  
+As a user, I want my selected model and other settings to be saved automatically so that they remain unchanged after I close and reopen the application.  
+
+**Acceptance Criteria**  
+- Selected model persists across application launches.  
+- All configurable settings (e.g., language, output format) are stored in a user‑specific configuration file or registry entry.  
+- On first launch, defaults are applied; on subsequent launches, saved values are loaded.  
+
+**Technical Constraints**  
+- Persistence must be implemented using the existing JSON‑based settings file located in the user data directory.  
+- No sensitive data may be stored in plain text.  
+
+---
+
+### 3. UI Loading & Inference Animations  
+#### 3.1 Model Loading Animation  
+**User Story**  
+When a model is being loaded, I need a clear visual cue and explanatory text so I understand the system is busy.  Realtime summary of the terminal output including character/token count should be displayed.
+
+**Acceptance Criteria**  
+- An animated spinner appears centered in the model selection area.  
+- Text “Loading model…” is displayed beneath the spinner.  
+- Animation remains until the model is fully loaded or an error occurs.  
+
+#### 3.2 Inference Progress Animation  
+**User Story**  
+During LLM inference, I want feedback that processing is ongoing, preventing the impression that the app has frozen.  
+
+**Acceptance Criteria**  
+- A progress animation (e.g., pulsing bars) is shown in the response pane.  
+- Accompanying text “Generating response…” is displayed.  
+- Animation stops when the response is rendered or an error is returned.  
+
+#### 3.3 “Refine with LLM” Step Animation  
+**User Story**  
+When I trigger the “Refine with LLM” action, I need an animation that confirms the refinement process has started.  
+
+**Acceptance Criteria**  
+- A distinct animation (e.g., rotating gear) appears next to the “Refine with LLM” button.  
+- Text “Refining output…” is shown.  
+- Animation ends when refinement completes or fails.  
+
+**Technical Constraints (All UI Animations)**  
+- Animations must be built with the existing React‑Native animation framework; no external animation libraries are permitted.  
+- All animations must be accessible (ARIA‑compatible) and respect reduced‑motion system settings.  
+
+---
+
+### 4. Prompt Format Support for Claude Code  
+**User Story**  
+As a developer, I need the system to generate prompts in Claude Code’s preferred format so that downstream refinement works without manual conversion.  
+
+**Acceptance Criteria**  
+- The application detects when Claude Code is the target LLM.  
+- Prompts are automatically formatted according to Claude Code specifications (e.g., markdown code fences, specific token delimiters).  
+- Existing refinement styles remain unchanged for other LLMs.  
+
+**Technical Constraints**  
+- Prompt formatting logic must be added to the existing `PromptFormatter` module.  
+- No changes to the core inference API contract.  
+
+---
+
+### 5. Output Directory Browser Visibility  
+**User Story**  
+When I launch Claude Dictate, I want the output directory browser to be visible immediately, ensuring all essential UI functions are accessible without extra clicks.  
+
+**Acceptance Criteria**  
+- The output directory selector panel is displayed on the main screen at startup.  
+- If the panel was previously hidden, it reappears automatically on launch.  
+- The layout adapts gracefully on different screen sizes (minimum width 1024 px).  
+
+**Technical Constraints**  
+- UI layout must use the existing Flexbox grid; no redesign of the overall window architecture.  
+- Visibility state should be stored using the same settings persistence mechanism described in Section 2.  
+
+---
+
+### 6. General Usability Enhancements  
+**User Story**  
+As a frequent user, I expect a smooth, responsive interface with consistent visual feedback throughout all interactions.  
+
+**Acceptance Criteria**  
+- All new animations and UI elements are tested for performance impact; CPU usage must not exceed 15 % on baseline hardware during idle animation.  
+- Accessibility audits (WCAG 2.1 AA) pass for all added components.  
+- Regression testing confirms no loss of existing functionality.  
+
+**Technical Constraints**  
+- All code changes must maintain compatibility with the current Electron 22 runtime.  
+- No increase in application bundle size greater than 5 MB.
+

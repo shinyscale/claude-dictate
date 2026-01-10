@@ -13,6 +13,7 @@ from .theme import THEME, FONTS, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MIN_WIDTH, 
 from .recorder import WaveformCanvas, StatusIndicator, ProgressBar, LoadingSpinner, GearSpinner, PulsingIndicator
 from .editor import TextEditor
 from .settings import SettingsPanel
+from .tray import SystemTray, is_tray_available
 
 from ..main import ClaudeDictate, HotkeyListener
 from ..config import DEFAULT_CONFIG, AppConfig
@@ -49,6 +50,8 @@ class ClaudeDictateGUI(ctk.CTk):
         self.is_refining = False
         self.current_style = "clean"
         self.hotkey_listener: Optional[HotkeyListener] = None
+        self.system_tray: Optional[SystemTray] = None
+        self._is_hidden_to_tray = False
 
         # Create UI
         self._create_layout()
@@ -56,6 +59,9 @@ class ClaudeDictateGUI(ctk.CTk):
 
         # Connect waveform to audio level updates
         self.app.recorder.on_level_update = self.waveform.update_level
+
+        # Initialize system tray if enabled
+        self._init_system_tray()
 
     def _apply_window_geometry(self) -> None:
         """Apply saved window geometry or use defaults."""
@@ -685,15 +691,71 @@ class ClaudeDictateGUI(ctk.CTk):
         """Called when status updates."""
         self.after(0, lambda: self.status.set_status(status))
 
-    def on_closing(self) -> None:
-        """Handle window close."""
-        # Save window geometry before closing
+    def _init_system_tray(self) -> None:
+        """Initialize system tray if available and enabled."""
+        if not is_tray_available():
+            print("[GUI] System tray not available")
+            return
+
+        # Always create tray but only start if minimize_to_tray is enabled
+        self.system_tray = SystemTray(
+            on_show=self._show_from_tray,
+            on_settings=self._open_settings,
+            on_exit=self._exit_app
+        )
+
+        # Start tray icon if minimize to tray is enabled
+        if self.config.get("minimize_to_tray", False):
+            self.system_tray.start()
+            print("[GUI] System tray started (minimize_to_tray enabled)")
+
+    def _show_from_tray(self) -> None:
+        """Show window from system tray."""
+        self._is_hidden_to_tray = False
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        print("[GUI] Window restored from tray")
+
+    def _hide_to_tray(self) -> None:
+        """Hide window to system tray."""
+        if not self.system_tray or not is_tray_available():
+            return
+
+        # Ensure tray is running
+        if not self.system_tray.is_running:
+            self.system_tray.start()
+
+        self._is_hidden_to_tray = True
+        self._save_window_geometry()
+        self.withdraw()
+        print("[GUI] Window hidden to tray")
+
+    def _exit_app(self) -> None:
+        """Exit the application completely."""
+        self._is_hidden_to_tray = False
         self._save_window_geometry()
 
+        # Stop system tray
+        if self.system_tray:
+            self.system_tray.stop()
+
+        # Cleanup
         self.app.cleanup()
         if self.hotkey_listener:
             self.hotkey_listener.stop()
+
         self.destroy()
+
+    def on_closing(self) -> None:
+        """Handle window close."""
+        # If minimize to tray is enabled, hide instead of exit
+        if self.config.get("minimize_to_tray", False) and is_tray_available():
+            self._hide_to_tray()
+            return
+
+        # Otherwise exit normally
+        self._exit_app()
 
 
 def run_gui() -> None:

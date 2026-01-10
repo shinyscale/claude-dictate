@@ -619,6 +619,30 @@ class SettingsPanel(ctk.CTkToplevel):
             command=self._browse_output_dir
         ).pack(side="right")
 
+        # === System Tray ===
+        self._add_section(content, "System Tray")
+
+        self.minimize_to_tray_var = ctk.BooleanVar(
+            value=self.config.get("minimize_to_tray", False)
+        )
+        ctk.CTkCheckBox(
+            content,
+            text="Minimize to system tray on exit",
+            variable=self.minimize_to_tray_var,
+            font=FONTS["body"],
+            text_color=THEME["text_secondary"],
+            fg_color=THEME["accent"],
+            hover_color=THEME["accent_hover"],
+            border_color=THEME["border"]
+        ).pack(anchor="w", pady=6)
+
+        ctk.CTkLabel(
+            content,
+            text="When enabled, closing the window minimizes to system tray instead of exiting.",
+            font=FONTS["small"],
+            text_color=THEME["text_muted"]
+        ).pack(anchor="w", pady=(0, 8))
+
         # === Buttons ===
         buttons = ctk.CTkFrame(self, fg_color="transparent")
         buttons.pack(fill="x", padx=24, pady=24)
@@ -750,6 +774,7 @@ class SettingsPanel(ctk.CTkToplevel):
         self.config["hotkey"] = self.hotkey_var.get()
         self.config["output_dir"] = self.output_dir_var.get()
         self.config["system_prompt"] = self.system_prompt_text.get("1.0", "end-1c")
+        self.config["minimize_to_tray"] = self.minimize_to_tray_var.get()
 
         # Save audio device
         mic_name = self.mic_var.get()
@@ -794,3 +819,4 @@ class SettingsPanel(ctk.CTkToplevel):
             "You are a text editor assistant. Your job is to clean up and refine transcribed speech. "
             "Output ONLY the refined text with no preamble, explanation, or commentary."
         )
+        self.minimize_to_tray_var.set(False)

@@ -1,0 +1,91 @@
+**Product Requirements Document (PRD)**  
+
+---
+
+### 1. Overview  
+Develop a lightweight dictation application that captures speech via a press‑and‑hold button, generates a raw transcription, and refines the output using local Large Language Models (LLMs) into selectable styles. Include an optional minimized system‑tray mode that automatically copies refined text to the clipboard and provides a persistent minimal UI for quick continuation or clearing of the transcript.
+
+---
+
+### 2. Goals  
+- Enable fast, on‑the‑fly speech‑to‑text capture.  
+- Provide instant refinement into multiple output formats (professional, casual, markdown, PRD, technical).  
+- Allow seamless start/stop recording within a single transcription session.  
+- Offer a system‑tray version that stays active, copies results to the clipboard, and supports hotkey‑driven continuation.  
+
+---
+
+### 3. Scope  
+- Core dictation and refinement workflow.  
+- Minimal UI element for recording feedback.  
+- System‑tray integration with clipboard automation.  
+- Settings panel for “Minimize to system tray on exit”.  
+
+---
+
+### 4. Functional Requirements
+
+| ID | Requirement | passes |
+|----|-------------|--------|
+| FR‑001 | **Press‑and‑Hold Recording**: When the user holds the designated button, audio is captured; releasing the button stops recording. | true |
+| FR‑002 | **Raw Transcription Generation**: Captured audio is sent to a local LLM to produce a raw text transcript. | true |
+| FR‑003 | **Refinement Styles**: The user can select one of the following output styles: Clean Professional, Casual, Markdown, Product Requirement Document, Technical Format. | true |
+| FR‑004 | **Continuous Session**: Starting a new recording after a stop appends to the existing transcript, preserving context. | true |
+| FR‑005 | **Smart Formatting (Future)**: Optionally break transcript into paragraphs during refinement (not required for MVP). | N/A |
+| FR‑006 | **System‑Tray Mode**: When enabled, the app runs minimized in the system tray and remains active after exit. | true |
+| FR‑007 | **Automatic Clipboard Update**: After each refinement cycle, the refined text is copied to the system clipboard. | false |
+| FR‑008 | **Minimal Recording UI**: While recording, display a small floating UI with a waveform animation. | true |
+| FR‑009 | **Post‑Recording UI Persistence**: After release, the UI remains visible, allowing hotkey actions (e.g., Continue, Clear). | true |
+| FR‑010 | **Continue Button**: Resumes recording and appends new speech to the current transcript. | true |
+| FR‑011 | **Clear Button**: Clears the current transcript and clipboard content. | true |
+| FR‑012 | **Click‑Away Behavior**: If the user clicks outside the UI, the current transcript is copied to the clipboard and the UI disappears. | false |
+| FR‑013 | **Settings Checkbox**: Add a "Minimize to system tray on exit" option in the Settings menu. | true |
+| FR‑014 | **Hotkey Support**: Provide configurable hotkeys for Start/Stop, Continue, and Clear actions while the UI is visible. | partial |
+
+---
+
+### 5. User Stories & Acceptance Criteria  
+
+| # | User Story | Acceptance Criteria |
+|---|------------|---------------------|
+| US‑001 | As a user, I want to hold a button and speak so that I get an immediate raw transcription. | • Pressing and holding the button starts audio capture.<br>• Releasing the button stops capture and displays raw text within 2 seconds. |
+| US‑002 | As a user, I want to refine the raw transcript into a chosen style. | • A style selector is available.<br>• Selecting a style triggers refinement and replaces raw text with styled output within 3 seconds. |
+| US‑003 | As a user, I want to pause and later resume recording without losing context. | • After stopping, pressing the button again appends new speech to the existing transcript.<br>• No duplication or loss of previous content. |
+| US‑004 | As a power user, I want the app to stay in the system tray so it’s always ready. | • Enabling “Minimize to system tray on exit” hides the main window but keeps the tray icon active.<br>• The app launches minimized if the setting is enabled. |
+| US‑005 | As a user, I want the refined text to be automatically copied so I can paste it anywhere. | • After each refinement, the clipboard contains the exact refined text.<br>• Clipboard update occurs within 500 ms of refinement completion. |
+| US‑006 | As a user, I want a small UI with a waveform while recording, so I know I’m being captured. | • UI appears at the cursor location when recording starts.<br>• Waveform animation reflects audio level in real time. |
+| US‑007 | As a user, I want the UI to stay after I stop recording so I can quickly continue or clear. | • UI remains visible for at least 10 seconds after release.<br>• Continue and Clear buttons are functional. |
+| US‑008 | As a user, I want clicking outside the UI to copy the text and dismiss the UI. | • Clicking anywhere outside the UI copies current transcript to clipboard and closes the UI instantly. |
+| US‑009 | As a user, I want configurable hotkeys for recording actions. | • Hotkeys can be set in Settings.<br>• Pressing the hotkey triggers the same behavior as the UI buttons. |
+
+---
+
+### 6. Technical Constraints  
+
+- **Local LLM Execution**: All transcription and refinement must run on the user’s machine; no external API calls.  
+- **Operating System**: Initial release targets Windows 10+ (system‑tray and clipboard APIs). Future cross‑platform support is out of scope for MVP.  
+- **Resource Usage**: LLM inference must stay under 2 GB RAM and not exceed 30 % CPU on a typical laptop (i5, 8 GB RAM).  
+- **Security**: Clipboard handling must not expose raw audio data; only final refined text is copied.  
+- **UI Framework**: Must support lightweight floating windows and system‑tray icons (e.g., Electron with native modules, or WinUI).  
+
+---
+
+### 7. Non‑Functional Requirements  
+
+- **Performance**: End‑to‑end latency (record → refined output) ≤ 5 seconds for a 30‑second speech segment.  
+- **Reliability**: Recording should not be lost on accidental UI closure; transcript persists in memory until cleared or app exit.  
+- **Usability**: UI elements (buttons, waveform) must be visible at ≥ 12 pt size and support high‑DPI displays.  
+- **Accessibility**: All actions must be reachable via keyboard shortcuts.  
+
+---
+
+### 8. UI/UX Details  
+
+- **Floating Recording UI**: Minimal window (≈ 200 × 80 px) with waveform, Continue, Clear buttons.  
+- **Waveform Animation**: Real‑time audio level visualization; color changes on active recording.  
+- **System‑Tray Icon**: Right‑click menu with “Open”, “Settings”, “Exit”.  
+- **Settings Panel**: Includes “Minimize to system tray on exit” checkbox and hotkey configuration section.  
+
+---  
+
+**End of Document**
