@@ -149,6 +149,94 @@ class HotkeyListener:
             self.listener.join()
 
 
+class SimpleHotkeyListener:
+    """
+    Simple hotkey listener for press-once actions (not hold-to-talk).
+    Triggers callback once when all keys are pressed together.
+    """
+
+    # Key name mappings for pynput (reuse from HotkeyListener)
+    KEY_MAP = HotkeyListener.KEY_MAP
+
+    def __init__(self, hotkey_combo: str, on_trigger: Callable[[], None]):
+        """
+        Initialize the simple hotkey listener.
+
+        Args:
+            hotkey_combo: Hotkey combination string (e.g., "ctrl+alt+c")
+            on_trigger: Callback when hotkey is pressed
+        """
+        self.on_trigger = on_trigger
+        self.keys_pressed: Set = set()
+        self.hotkey_keys = self._parse_hotkey(hotkey_combo)
+        self.was_triggered = False
+        self.listener: Optional[keyboard.Listener] = None
+
+    def _parse_hotkey(self, combo: str) -> Set:
+        """Parse hotkey string into set of key identifiers."""
+        keys = set()
+        parts = combo.lower().replace(" ", "").split("+")
+
+        for part in parts:
+            if part in self.KEY_MAP:
+                keys.add(part)
+            else:
+                keys.add(part)
+
+        return keys
+
+    def _normalize_key(self, key) -> Optional[str]:
+        """Normalize a pynput key to a string identifier."""
+        for name, key_set in self.KEY_MAP.items():
+            if key in key_set:
+                return name
+
+        try:
+            if hasattr(key, 'char') and key.char:
+                return key.char.lower()
+        except AttributeError:
+            pass
+
+        return None
+
+    def _handle_press(self, key) -> None:
+        """Handle key press event."""
+        normalized = self._normalize_key(key)
+        if normalized:
+            self.keys_pressed.add(normalized)
+
+            # Check if all hotkey keys are pressed (and not already triggered)
+            if self.hotkey_keys.issubset(self.keys_pressed) and not self.was_triggered:
+                self.was_triggered = True
+                self.on_trigger()
+
+    def _handle_release(self, key) -> None:
+        """Handle key release event."""
+        normalized = self._normalize_key(key)
+        if normalized:
+            self.keys_pressed.discard(normalized)
+
+            # Reset triggered state when any hotkey key is released
+            if normalized in self.hotkey_keys:
+                self.was_triggered = False
+
+    def start(self) -> None:
+        """Start listening for hotkeys."""
+        self.listener = keyboard.Listener(
+            on_press=self._handle_press,
+            on_release=self._handle_release
+        )
+        self.listener.start()
+
+    def stop(self) -> None:
+        """Stop listening for hotkeys."""
+        if self.listener:
+            self.listener.stop()
+            self.listener = None
+        self.was_triggered = False
+        self.keys_pressed.clear()
+
+
 class ClaudeDictate:
     """Main application class coordinating all components."""
 

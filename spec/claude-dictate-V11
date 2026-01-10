@@ -40,7 +40,7 @@ Develop a lightweight dictation application that captures speech via a press‑a
 | FR‑011 | **Clear Button**: Clears the current transcript and clipboard content. | true |
 | FR‑012 | **Click‑Away Behavior**: If the user clicks outside the UI, the current transcript is copied to the clipboard and the UI disappears. | true |
 | FR‑013 | **Settings Checkbox**: Add a "Minimize to system tray on exit" option in the Settings menu. | true |
-| FR‑014 | **Hotkey Support**: Provide configurable hotkeys for Start/Stop, Continue, and Clear actions while the UI is visible. | partial |
+| FR‑014 | **Hotkey Support**: Provide configurable hotkeys for Start/Stop, Continue, and Clear actions while the UI is visible. | true |
 
 ---
 

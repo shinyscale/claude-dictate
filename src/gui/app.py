@@ -15,7 +15,7 @@ from .editor import TextEditor
 from .settings import SettingsPanel
 from .tray import SystemTray, is_tray_available
 
-from ..main import ClaudeDictate, HotkeyListener
+from ..main import ClaudeDictate, HotkeyListener, SimpleHotkeyListener
 from ..config import DEFAULT_CONFIG, AppConfig
 
 
@@ -50,6 +50,8 @@ class ClaudeDictateGUI(ctk.CTk):
         self.is_refining = False
         self.current_style = "clean"
         self.hotkey_listener: Optional[HotkeyListener] = None
+        self.continue_hotkey_listener: Optional[SimpleHotkeyListener] = None
+        self.clear_hotkey_listener: Optional[SimpleHotkeyListener] = None
         self.system_tray: Optional[SystemTray] = None
         self._is_hidden_to_tray = False
 
@@ -442,23 +444,53 @@ class ClaudeDictateGUI(ctk.CTk):
         self.refined_editor.pack(fill="both", expand=True, pady=(8, 0))
 
     def _bind_hotkey(self) -> None:
-        """Bind keyboard hotkey for recording using pynput."""
+        """Bind keyboard hotkeys for recording, continue, and clear using pynput."""
+        # Stop existing listeners
+        if self.hotkey_listener:
+            self.hotkey_listener.stop()
+        if self.continue_hotkey_listener:
+            self.continue_hotkey_listener.stop()
+        if self.clear_hotkey_listener:
+            self.clear_hotkey_listener.stop()
+
+        # Record hotkey (hold-to-talk)
         try:
             hotkey = self.config.get("hotkey", "ctrl+shift")
-
-            # Stop existing listener
-            if self.hotkey_listener:
-                self.hotkey_listener.stop()
-
             self.hotkey_listener = HotkeyListener(
                 hotkey_combo=hotkey,
                 on_activate=lambda: self.after(0, self._start_recording),
                 on_deactivate=lambda: self.after(0, self._stop_recording)
             )
             self.hotkey_listener.start()
-
+            print(f"[GUI] Record hotkey bound: {hotkey}")
         except Exception as e:
-            print(f"Could not bind hotkey: {e}")
+            print(f"Could not bind record hotkey: {e}")
+
+        # Continue hotkey (press-once to resume recording)
+        try:
+            continue_hotkey = self.config.get("continue_hotkey", "ctrl+alt+c")
+            if continue_hotkey:
+                self.continue_hotkey_listener = SimpleHotkeyListener(
+                    hotkey_combo=continue_hotkey,
+                    on_trigger=lambda: self.after(0, self._continue_recording)
+                )
+                self.continue_hotkey_listener.start()
+                print(f"[GUI] Continue hotkey bound: {continue_hotkey}")
+        except Exception as e:
+            print(f"Could not bind continue hotkey: {e}")
+
+        # Clear hotkey (press-once to clear transcript)
+        try:
+            clear_hotkey = self.config.get("clear_hotkey", "ctrl+alt+x")
+            if clear_hotkey:
+                self.clear_hotkey_listener = SimpleHotkeyListener(
+                    hotkey_combo=clear_hotkey,
+                    on_trigger=lambda: self.after(0, self._clear_editors)
+                )
+                self.clear_hotkey_listener.start()
+                print(f"[GUI] Clear hotkey bound: {clear_hotkey}")
+        except Exception as e:
+            print(f"Could not bind clear hotkey: {e}")
 
     def _toggle_recording(self) -> None:
         """Toggle recording on/off."""
@@ -467,6 +499,13 @@ class ClaudeDictateGUI(ctk.CTk):
             self._stop_recording()
         else:
             self._start_recording()
+
+    def _continue_recording(self) -> None:
+        """Continue recording - same as start but used by hotkey (FR-014)."""
+        print("[DEBUG] _continue_recording called via hotkey")
+        if not self.is_recording:
+            self._start_recording()
+            self.status.set_status("Continuing recording...", THEME["error"])
 
     def _start_recording(self) -> None:
         """Start recording."""
@@ -793,8 +832,14 @@ class ClaudeDictateGUI(ctk.CTk):
 
         # Cleanup
         self.app.cleanup()
+
+        # Stop all hotkey listeners
         if self.hotkey_listener:
             self.hotkey_listener.stop()
+        if self.continue_hotkey_listener:
+            self.continue_hotkey_listener.stop()
+        if self.clear_hotkey_listener:
+            self.clear_hotkey_listener.stop()
 
         self.destroy()
 

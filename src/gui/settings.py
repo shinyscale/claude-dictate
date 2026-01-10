@@ -355,13 +355,49 @@ class SettingsPanel(ctk.CTkToplevel):
         content.pack(fill="both", expand=True, padx=24)
 
         # === Hotkey Settings (top priority - first thing users want to set) ===
-        self._add_section(content, "Hold-to-Talk Hotkey")
+        self._add_section(content, "Hotkeys")
+
+        # Record hotkey (hold-to-talk)
+        ctk.CTkLabel(
+            content,
+            text="Record (Hold-to-Talk):",
+            font=FONTS["body"],
+            text_color=THEME["text_secondary"]
+        ).pack(anchor="w", pady=(0, 4))
 
         self.hotkey_var = ctk.StringVar(
             value=self.config.get("hotkey", "ctrl+shift")
         )
         self.hotkey_capture = HotkeyCapture(content, self.hotkey_var)
-        self.hotkey_capture.pack(fill="x", pady=(0, 8))
+        self.hotkey_capture.pack(fill="x", pady=(0, 12))
+
+        # Continue hotkey (resume recording)
+        ctk.CTkLabel(
+            content,
+            text="Continue Recording:",
+            font=FONTS["body"],
+            text_color=THEME["text_secondary"]
+        ).pack(anchor="w", pady=(0, 4))
+
+        self.continue_hotkey_var = ctk.StringVar(
+            value=self.config.get("continue_hotkey", "ctrl+alt+c")
+        )
+        self.continue_hotkey_capture = HotkeyCapture(content, self.continue_hotkey_var)
+        self.continue_hotkey_capture.pack(fill="x", pady=(0, 12))
+
+        # Clear hotkey
+        ctk.CTkLabel(
+            content,
+            text="Clear Transcript:",
+            font=FONTS["body"],
+            text_color=THEME["text_secondary"]
+        ).pack(anchor="w", pady=(0, 4))
+
+        self.clear_hotkey_var = ctk.StringVar(
+            value=self.config.get("clear_hotkey", "ctrl+alt+x")
+        )
+        self.clear_hotkey_capture = HotkeyCapture(content, self.clear_hotkey_var)
+        self.clear_hotkey_capture.pack(fill="x", pady=(0, 8))
 
         # === LLM Settings ===
         self._add_section(content, "LLM Configuration")
@@ -772,6 +808,8 @@ class SettingsPanel(ctk.CTkToplevel):
         self.config["ollama_url"] = self.ollama_url_var.get()
         self.config["lm_studio_url"] = self.lm_studio_url_var.get()
         self.config["hotkey"] = self.hotkey_var.get()
+        self.config["continue_hotkey"] = self.continue_hotkey_var.get()
+        self.config["clear_hotkey"] = self.clear_hotkey_var.get()
         self.config["output_dir"] = self.output_dir_var.get()
         self.config["system_prompt"] = self.system_prompt_text.get("1.0", "end-1c")
         self.config["minimize_to_tray"] = self.minimize_to_tray_var.get()
@@ -812,6 +850,8 @@ class SettingsPanel(ctk.CTkToplevel):
         self.ollama_url_var.set("http://localhost:11434")
         self.lm_studio_url_var.set("http://localhost:1234/v1")
         self.hotkey_var.set("ctrl+shift")
+        self.continue_hotkey_var.set("ctrl+alt+c")
+        self.clear_hotkey_var.set("ctrl+alt+x")
         self.output_dir_var.set("./outputs")
         self.mic_var.set("Default")
         self.system_prompt_text.delete("1.0", "end")
