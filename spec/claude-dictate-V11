@@ -33,7 +33,7 @@ Develop a lightweight dictation application that captures speech via a press‑a
 | FR‑004 | **Continuous Session**: Starting a new recording after a stop appends to the existing transcript, preserving context. | true |
 | FR‑005 | **Smart Formatting (Future)**: Optionally break transcript into paragraphs during refinement (not required for MVP). | N/A |
 | FR‑006 | **System‑Tray Mode**: When enabled, the app runs minimized in the system tray and remains active after exit. | true |
-| FR‑007 | **Automatic Clipboard Update**: After each refinement cycle, the refined text is copied to the system clipboard. | false |
+| FR‑007 | **Automatic Clipboard Update**: After each refinement cycle, the refined text is copied to the system clipboard. | true |
 | FR‑008 | **Minimal Recording UI**: While recording, display a small floating UI with a waveform animation. | true |
 | FR‑009 | **Post‑Recording UI Persistence**: After release, the UI remains visible, allowing hotkey actions (e.g., Continue, Clear). | true |
 | FR‑010 | **Continue Button**: Resumes recording and appends new speech to the current transcript. | true |

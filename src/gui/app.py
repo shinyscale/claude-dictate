@@ -683,9 +683,18 @@ class ClaudeDictateGUI(ctk.CTk):
         self.after(0, append)
 
     def _on_refinement_complete(self, text: str) -> None:
-        """Called when refinement is complete."""
+        """Called when refinement is complete. Auto-copies to clipboard (FR-007)."""
         print(f"[DEBUG] _on_refinement_complete callback fired, text_len={len(text) if text else 0}")
-        self.after(0, lambda: self.refined_editor.set_text(text))
+
+        def update_and_copy():
+            self.refined_editor.set_text(text)
+            # FR-007: Automatically copy refined text to clipboard
+            if text and text.strip():
+                self.app.copy_to_clipboard(text)
+                self.status.set_status("Refined & copied to clipboard", THEME["success"])
+                print("[GUI] Refined text automatically copied to clipboard")
+
+        self.after(0, update_and_copy)
 
     def _on_status_update(self, status: str) -> None:
         """Called when status updates."""
