@@ -38,7 +38,7 @@ Develop a lightweight dictation application that captures speech via a press‑a
 | FR‑009 | **Post‑Recording UI Persistence**: After release, the UI remains visible, allowing hotkey actions (e.g., Continue, Clear). | true |
 | FR‑010 | **Continue Button**: Resumes recording and appends new speech to the current transcript. | true |
 | FR‑011 | **Clear Button**: Clears the current transcript and clipboard content. | true |
-| FR‑012 | **Click‑Away Behavior**: If the user clicks outside the UI, the current transcript is copied to the clipboard and the UI disappears. | false |
+| FR‑012 | **Click‑Away Behavior**: If the user clicks outside the UI, the current transcript is copied to the clipboard and the UI disappears. | true |
 | FR‑013 | **Settings Checkbox**: Add a "Minimize to system tray on exit" option in the Settings menu. | true |
 | FR‑014 | **Hotkey Support**: Provide configurable hotkeys for Start/Stop, Continue, and Clear actions while the UI is visible. | partial |
 

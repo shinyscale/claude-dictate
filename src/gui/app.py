@@ -63,6 +63,9 @@ class ClaudeDictateGUI(ctk.CTk):
         # Initialize system tray if enabled
         self._init_system_tray()
 
+        # FR-012: Bind focus-out event for click-away behavior (when tray mode enabled)
+        self.bind("<FocusOut>", self._on_focus_out)
+
     def _apply_window_geometry(self) -> None:
         """Apply saved window geometry or use defaults."""
         width = self.config.get("window_width") or WINDOW_WIDTH
@@ -699,6 +702,45 @@ class ClaudeDictateGUI(ctk.CTk):
     def _on_status_update(self, status: str) -> None:
         """Called when status updates."""
         self.after(0, lambda: self.status.set_status(status))
+
+    def _on_focus_out(self, event) -> None:
+        """FR-012: Handle click-away behavior when window loses focus.
+
+        When minimize_to_tray is enabled and user clicks outside the window:
+        - Copy current transcript to clipboard
+        - Hide window to system tray
+        """
+        # Only activate click-away behavior when in tray mode
+        if not self.config.get("minimize_to_tray", False):
+            return
+
+        # Don't trigger if recording is active
+        if self.is_recording or self.is_refining:
+            return
+
+        # Don't trigger if already hidden
+        if self._is_hidden_to_tray:
+            return
+
+        # Check if focus went to a child window (like settings dialog)
+        # In that case, don't hide
+        try:
+            focused = self.focus_get()
+            if focused is not None:
+                # Focus is still within our app
+                return
+        except Exception:
+            pass
+
+        # Copy transcript to clipboard before hiding
+        text = self.refined_editor.get_text() or self.raw_editor.get_text()
+        if text and text.strip():
+            self.app.copy_to_clipboard(text)
+            print("[GUI] Click-away: copied transcript to clipboard")
+
+        # Hide to tray
+        self._hide_to_tray()
+        print("[GUI] Click-away: hidden to tray")
 
     def _init_system_tray(self) -> None:
         """Initialize system tray if available and enabled."""
