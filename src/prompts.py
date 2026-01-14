@@ -132,6 +132,35 @@ Transcription:
 {text}
 
 Output the refined prompt:""",
+
+    "json_prd": """Parse this transcribed speech and identify ALL distinct features, requirements, or test cases mentioned. Output each as a separate JSON object in an array.
+
+For each feature/test case:
+- Determine the category (functional, ui, integration, performance, accessibility, etc.)
+- Write a clear description of what is being tested or required
+- Break down into specific test steps
+- Set passes to false (to be updated after testing)
+
+Output ONLY a valid JSON array in this exact format:
+[
+  {{
+    "category": "<category>",
+    "description": "<what this test verifies>",
+    "steps": [
+      "<step 1>",
+      "<step 2>",
+      "<step 3>"
+    ],
+    "passes": false
+  }}
+]
+
+If only one feature is mentioned, still output it as an array with one element.
+
+Transcription:
+{text}
+
+Output only the JSON array:""",
 }
 
 
@@ -176,5 +205,6 @@ def get_style_description(style: str) -> str:
         "bullets": "Convert to bullet point format",
         "prd": "Format as product requirements",
         "prompt": "Convert to AI prompt format",
+        "json_prd": "Parse features into JSON test cases",
     }
     return descriptions.get(style, "Unknown style")

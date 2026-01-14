@@ -12,6 +12,7 @@ import requests
 from pynput import keyboard
 
 from .theme import THEME, FONTS
+from .tray import is_tray_available, get_tray_error
 from ..audio import AudioRecorder
 from ..config import AppConfig
 
@@ -371,20 +372,6 @@ class SettingsPanel(ctk.CTkToplevel):
         self.hotkey_capture = HotkeyCapture(content, self.hotkey_var)
         self.hotkey_capture.pack(fill="x", pady=(0, 12))
 
-        # Continue hotkey (resume recording)
-        ctk.CTkLabel(
-            content,
-            text="Continue Recording:",
-            font=FONTS["body"],
-            text_color=THEME["text_secondary"]
-        ).pack(anchor="w", pady=(0, 4))
-
-        self.continue_hotkey_var = ctk.StringVar(
-            value=self.config.get("continue_hotkey", "ctrl+alt+c")
-        )
-        self.continue_hotkey_capture = HotkeyCapture(content, self.continue_hotkey_var)
-        self.continue_hotkey_capture.pack(fill="x", pady=(0, 12))
-
         # Clear hotkey
         ctk.CTkLabel(
             content,
@@ -658,19 +645,40 @@ class SettingsPanel(ctk.CTkToplevel):
         # === System Tray ===
         self._add_section(content, "System Tray")
 
+        tray_available = is_tray_available()
+
         self.minimize_to_tray_var = ctk.BooleanVar(
-            value=self.config.get("minimize_to_tray", False)
+            value=self.config.get("minimize_to_tray", False) if tray_available else False
         )
-        ctk.CTkCheckBox(
+        tray_checkbox = ctk.CTkCheckBox(
             content,
             text="Minimize to system tray on exit",
             variable=self.minimize_to_tray_var,
             font=FONTS["body"],
-            text_color=THEME["text_secondary"],
+            text_color=THEME["text_secondary"] if tray_available else THEME["text_muted"],
             fg_color=THEME["accent"],
             hover_color=THEME["accent_hover"],
             border_color=THEME["border"]
-        ).pack(anchor="w", pady=6)
+        )
+        tray_checkbox.pack(anchor="w", pady=6)
+
+        if not tray_available:
+            tray_checkbox.configure(state="disabled")
+            tray_error = get_tray_error()
+            error_text = f"System tray unavailable: {tray_error}" if tray_error else "System tray not available"
+            ctk.CTkLabel(
+                content,
+                text=error_text,
+                font=FONTS["small"],
+                text_color=THEME["warning"],
+                wraplength=400
+            ).pack(anchor="w", pady=(0, 2))
+            ctk.CTkLabel(
+                content,
+                text="Try: pip install pystray Pillow",
+                font=FONTS["small"],
+                text_color=THEME["text_muted"]
+            ).pack(anchor="w", pady=(0, 4))
 
         ctk.CTkLabel(
             content,
@@ -808,7 +816,6 @@ class SettingsPanel(ctk.CTkToplevel):
         self.config["ollama_url"] = self.ollama_url_var.get()
         self.config["lm_studio_url"] = self.lm_studio_url_var.get()
         self.config["hotkey"] = self.hotkey_var.get()
-        self.config["continue_hotkey"] = self.continue_hotkey_var.get()
         self.config["clear_hotkey"] = self.clear_hotkey_var.get()
         self.config["output_dir"] = self.output_dir_var.get()
         self.config["system_prompt"] = self.system_prompt_text.get("1.0", "end-1c")
@@ -850,7 +857,6 @@ class SettingsPanel(ctk.CTkToplevel):
         self.ollama_url_var.set("http://localhost:11434")
         self.lm_studio_url_var.set("http://localhost:1234/v1")
         self.hotkey_var.set("ctrl+shift")
-        self.continue_hotkey_var.set("ctrl+alt+c")
         self.clear_hotkey_var.set("ctrl+alt+x")
         self.output_dir_var.set("./outputs")
         self.mic_var.set("Default")

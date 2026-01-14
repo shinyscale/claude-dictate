@@ -440,7 +440,7 @@ def main():
         type=str,
         default="clean",
         choices=["clean", "professional", "technical", "casual", "minimal",
-                 "expand", "summarize", "bullets", "prd", "prompt"],
+                 "expand", "summarize", "bullets", "prd", "prompt", "json_prd"],
         help="Refinement style"
     )
     parser.add_argument(

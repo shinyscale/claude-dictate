@@ -13,10 +13,21 @@ from .theme import THEME, FONTS, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MIN_WIDTH, 
 from .recorder import WaveformCanvas, StatusIndicator, ProgressBar, LoadingSpinner, GearSpinner, PulsingIndicator
 from .editor import TextEditor
 from .settings import SettingsPanel
-from .tray import SystemTray, is_tray_available
+from .tray import SystemTray, is_tray_available, get_tray_error
+from .overlay import FloatingOverlay
 
 from ..main import ClaudeDictate, HotkeyListener, SimpleHotkeyListener
 from ..config import DEFAULT_CONFIG, AppConfig
+
+
+def is_running_in_wsl() -> bool:
+    """Check if running under Windows Subsystem for Linux."""
+    try:
+        with open("/proc/version", "r") as f:
+            version = f.read().lower()
+            return "microsoft" in version or "wsl" in version
+    except (FileNotFoundError, PermissionError):
+        return False
 
 
 class ClaudeDictateGUI(ctk.CTk):
@@ -50,7 +61,6 @@ class ClaudeDictateGUI(ctk.CTk):
         self.is_refining = False
         self.current_style = "clean"
         self.hotkey_listener: Optional[HotkeyListener] = None
-        self.continue_hotkey_listener: Optional[SimpleHotkeyListener] = None
         self.clear_hotkey_listener: Optional[SimpleHotkeyListener] = None
         self.system_tray: Optional[SystemTray] = None
         self._is_hidden_to_tray = False
@@ -60,10 +70,20 @@ class ClaudeDictateGUI(ctk.CTk):
         self._bind_hotkey()
 
         # Connect waveform to audio level updates
-        self.app.recorder.on_level_update = self.waveform.update_level
+        self.app.recorder.on_level_update = self._on_audio_level
+
+        # Initialize floating overlay for recording feedback
+        self.overlay = FloatingOverlay(
+            self,
+            on_copy=self._copy_to_clipboard,
+            on_clear=self._clear_editors
+        )
 
         # Initialize system tray if enabled
         self._init_system_tray()
+
+        # Warn if minimize_to_tray was enabled but tray isn't available (e.g., running in WSL)
+        self._check_tray_availability()
 
         # FR-012: Bind focus-out event for click-away behavior (when tray mode enabled)
         self.bind("<FocusOut>", self._on_focus_out)
@@ -376,6 +396,7 @@ class ClaudeDictateGUI(ctk.CTk):
             "Casual": "casual",
             "PRD Format": "prd",
             "Markdown": "bullets",
+            "JSON Test Case": "json_prd",
         }
         style_names = list(self.style_map.keys())
 
@@ -444,12 +465,10 @@ class ClaudeDictateGUI(ctk.CTk):
         self.refined_editor.pack(fill="both", expand=True, pady=(8, 0))
 
     def _bind_hotkey(self) -> None:
-        """Bind keyboard hotkeys for recording, continue, and clear using pynput."""
+        """Bind keyboard hotkeys for recording and clear using pynput."""
         # Stop existing listeners
         if self.hotkey_listener:
             self.hotkey_listener.stop()
-        if self.continue_hotkey_listener:
-            self.continue_hotkey_listener.stop()
         if self.clear_hotkey_listener:
             self.clear_hotkey_listener.stop()
 
@@ -465,19 +484,6 @@ class ClaudeDictateGUI(ctk.CTk):
             print(f"[GUI] Record hotkey bound: {hotkey}")
         except Exception as e:
             print(f"Could not bind record hotkey: {e}")
-
-        # Continue hotkey (press-once to resume recording)
-        try:
-            continue_hotkey = self.config.get("continue_hotkey", "ctrl+alt+c")
-            if continue_hotkey:
-                self.continue_hotkey_listener = SimpleHotkeyListener(
-                    hotkey_combo=continue_hotkey,
-                    on_trigger=lambda: self.after(0, self._continue_recording)
-                )
-                self.continue_hotkey_listener.start()
-                print(f"[GUI] Continue hotkey bound: {continue_hotkey}")
-        except Exception as e:
-            print(f"Could not bind continue hotkey: {e}")
 
         # Clear hotkey (press-once to clear transcript)
         try:
@@ -500,13 +506,6 @@ class ClaudeDictateGUI(ctk.CTk):
         else:
             self._start_recording()
 
-    def _continue_recording(self) -> None:
-        """Continue recording - same as start but used by hotkey (FR-014)."""
-        print("[DEBUG] _continue_recording called via hotkey")
-        if not self.is_recording:
-            self._start_recording()
-            self.status.set_status("Continuing recording...", THEME["error"])
-
     def _start_recording(self) -> None:
         """Start recording."""
         print("[DEBUG] _start_recording called")
@@ -519,6 +518,12 @@ class ClaudeDictateGUI(ctk.CTk):
             self.record_btn.configure(text="🔴 Click to Stop", fg_color=THEME["error"])
             self.waveform.start_animation()
             self.status.set_status("Recording...", THEME["error"])
+            # Update tray icon to show recording state
+            if self.system_tray and self.system_tray.is_running:
+                self.system_tray.update_icon(recording=True)
+            # Show floating overlay for visual feedback (especially when minimized)
+            if self.overlay:
+                self.overlay.show_recording()
             print("[DEBUG] UI updated, starting recording thread")
 
             # Start recording in background
@@ -551,6 +556,9 @@ class ClaudeDictateGUI(ctk.CTk):
         self.is_recording = False
         self.record_btn.configure(text="🎤 Click to Record", fg_color=THEME["accent"])
         self.waveform.stop_animation()
+        # Update tray icon to show idle state
+        if self.system_tray and self.system_tray.is_running:
+            self.system_tray.update_icon(recording=False)
 
         # Show progress bar
         self.progress_bar.show()
@@ -568,6 +576,9 @@ class ClaudeDictateGUI(ctk.CTk):
                     self.after(0, lambda: self.status.set_status("Ready", THEME["success"]))
                 else:
                     self.after(0, lambda: self.status.set_status("No audio captured", THEME["warning"]))
+                    # Show empty result in overlay when no audio captured
+                    if self.overlay:
+                        self.after(0, lambda: self.overlay.show_result(""))
                 self.after(500, self.progress_bar.hide)
             except Exception as e:
                 self.after(0, lambda: self._on_error(f"Transcription error: {e}"))
@@ -580,8 +591,22 @@ class ClaudeDictateGUI(ctk.CTk):
         self.is_recording = False
         self.record_btn.configure(text="🎤 Click to Record", fg_color=THEME["accent"])
         self.waveform.stop_animation()
+        # Reset tray icon on error
+        if self.system_tray and self.system_tray.is_running:
+            self.system_tray.update_icon(recording=False)
+        # Hide overlay on error
+        if self.overlay:
+            self.overlay.hide_overlay()
         self.status.set_status(message[:50], THEME["error"])
         print(f"Error: {message}")  # Also log to console
+
+    def _on_audio_level(self, level: float) -> None:
+        """Handle audio level updates - forward to waveform and overlay."""
+        # Update main window waveform
+        self.waveform.update_level(level)
+        # Update overlay waveform (if visible)
+        if self.overlay:
+            self.overlay.update_audio_level(level)
 
     def _refine_text(self) -> None:
         """Refine transcribed text with LLM."""
@@ -715,13 +740,20 @@ class ClaudeDictateGUI(ctk.CTk):
         pass
 
     def _on_transcription_complete(self, text: str) -> None:
-        """Called when transcription is complete. Appends to existing text."""
+        """Called when transcription is complete. Appends to existing text and auto-copies."""
         def append():
             current = self.raw_editor.get_text().strip()
             if current:
                 self.raw_editor.set_text(current + " " + text)
             else:
                 self.raw_editor.set_text(text)
+            # Auto-copy transcription to clipboard
+            if text and text.strip():
+                self.app.copy_to_clipboard(text)
+                print("[GUI] Transcription auto-copied to clipboard")
+            # Show result in floating overlay
+            if self.overlay:
+                self.overlay.show_result(text if text else "")
         self.after(0, append)
 
     def _on_refinement_complete(self, text: str) -> None:
@@ -799,6 +831,42 @@ class ClaudeDictateGUI(ctk.CTk):
             self.system_tray.start()
             print("[GUI] System tray started (minimize_to_tray enabled)")
 
+    def _check_tray_availability(self) -> None:
+        """Show warning if tray was requested but isn't available."""
+        if not self.config.get("minimize_to_tray", False):
+            return  # User didn't enable tray, no warning needed
+
+        if is_tray_available():
+            return  # Tray is available, all good
+
+        # Tray was requested but isn't available
+        tray_error = get_tray_error()
+        if is_running_in_wsl():
+            message = (
+                "System tray is not available when running in WSL.\n\n"
+                "To use system tray functionality, run Claude Dictate "
+                "natively on Windows using run_windows.bat"
+            )
+        elif tray_error:
+            message = (
+                f"System tray unavailable: {tray_error}\n\n"
+                "Try running: pip install pystray Pillow\n\n"
+                "The 'minimize to tray' setting has been disabled."
+            )
+        else:
+            message = (
+                "System tray is not available on this platform.\n\n"
+                "The 'minimize to tray' setting has been disabled."
+            )
+
+        # Disable the setting since it can't work
+        self.config["minimize_to_tray"] = False
+        app_config = AppConfig.from_dict(self.config)
+        app_config.save()
+
+        # Show warning after window is visible
+        self.after(100, lambda: messagebox.showwarning("System Tray Unavailable", message))
+
     def _show_from_tray(self) -> None:
         """Show window from system tray."""
         self._is_hidden_to_tray = False
@@ -851,8 +919,6 @@ class ClaudeDictateGUI(ctk.CTk):
         # Stop all hotkey listeners
         if self.hotkey_listener:
             self.hotkey_listener.stop()
-        if self.continue_hotkey_listener:
-            self.continue_hotkey_listener.stop()
         if self.clear_hotkey_listener:
             self.clear_hotkey_listener.stop()
 

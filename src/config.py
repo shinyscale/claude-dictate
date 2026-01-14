@@ -18,12 +18,16 @@ DEFAULT_CONFIG = {
     "sample_rate": 16000,
     "channels": 1,
     "chunk_size": 1024,
+    "audio_device_index": None,
     "hotkey": "ctrl+shift",
+    "clear_hotkey": "ctrl+alt+x",
     "ollama_url": "http://localhost:11434",
     "lm_studio_url": "http://localhost:1234/v1",
     "default_llm": "ollama",
     "default_model": "llama3.2",
+    "system_prompt": "",
     "output_dir": "./outputs",
+    "minimize_to_tray": False,
     # Window geometry (None means use defaults)
     "window_width": None,
     "window_height": None,
@@ -46,6 +50,7 @@ class AudioConfig:
     sample_rate: int = 16000
     channels: int = 1
     chunk_size: int = 1024
+    device_index: Optional[int] = None
 
 
 @dataclass
@@ -57,12 +62,14 @@ class LLMConfig:
     lm_studio_url: str = "http://localhost:1234/v1"
     temperature: float = 0.3
     max_tokens: int = 2048
+    system_prompt: str = ""
 
 
 @dataclass
 class HotkeyConfig:
     """Hotkey configuration."""
     record_hotkey: str = "ctrl+shift"
+    clear_hotkey: str = "ctrl+alt+x"
 
 
 @dataclass
@@ -82,6 +89,12 @@ class WindowConfig:
 
 
 @dataclass
+class SystemConfig:
+    """System behavior configuration."""
+    minimize_to_tray: bool = False
+
+
+@dataclass
 class AppConfig:
     """Main application configuration."""
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
@@ -90,6 +103,7 @@ class AppConfig:
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     window: WindowConfig = field(default_factory=WindowConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
 
     @classmethod
     def get_config_path(cls) -> Path:
@@ -139,6 +153,7 @@ class AppConfig:
             "hotkey": asdict(self.hotkey),
             "output": asdict(self.output),
             "window": asdict(self.window),
+            "system": asdict(self.system),
         }
 
     def to_flat_dict(self) -> dict:
@@ -149,12 +164,16 @@ class AppConfig:
             "sample_rate": self.audio.sample_rate,
             "channels": self.audio.channels,
             "chunk_size": self.audio.chunk_size,
+            "audio_device_index": self.audio.device_index,
             "hotkey": self.hotkey.record_hotkey,
+            "clear_hotkey": self.hotkey.clear_hotkey,
             "ollama_url": self.llm.ollama_url,
             "lm_studio_url": self.llm.lm_studio_url,
             "default_llm": self.llm.backend,
             "default_model": self.llm.model,
+            "system_prompt": self.llm.system_prompt,
             "output_dir": self.output.output_dir,
+            "minimize_to_tray": self.system.minimize_to_tray,
             "window_width": self.window.width,
             "window_height": self.window.height,
             "window_x": self.window.x,
@@ -168,6 +187,7 @@ class AppConfig:
         if "whisper" in data:
             # Nested format
             window_data = data.get("window", {})
+            system_data = data.get("system", {})
             return cls(
                 whisper=WhisperConfig(**data.get("whisper", {})),
                 audio=AudioConfig(**data.get("audio", {})),
@@ -175,6 +195,7 @@ class AppConfig:
                 hotkey=HotkeyConfig(**data.get("hotkey", {})),
                 output=OutputConfig(**data.get("output", {})),
                 window=WindowConfig(**window_data) if window_data else WindowConfig(),
+                system=SystemConfig(**system_data) if system_data else SystemConfig(),
             )
         else:
             # Flat format (backwards compatibility)
@@ -187,15 +208,18 @@ class AppConfig:
                     sample_rate=data.get("sample_rate", 16000),
                     channels=data.get("channels", 1),
                     chunk_size=data.get("chunk_size", 1024),
+                    device_index=data.get("audio_device_index"),
                 ),
                 llm=LLMConfig(
                     backend=data.get("default_llm", "ollama"),
                     model=data.get("default_model", "llama3.2"),
                     ollama_url=data.get("ollama_url", "http://localhost:11434"),
                     lm_studio_url=data.get("lm_studio_url", "http://localhost:1234/v1"),
+                    system_prompt=data.get("system_prompt", ""),
                 ),
                 hotkey=HotkeyConfig(
                     record_hotkey=data.get("hotkey", "ctrl+shift"),
+                    clear_hotkey=data.get("clear_hotkey", "ctrl+alt+x"),
                 ),
                 output=OutputConfig(
                     output_dir=data.get("output_dir", "./outputs"),
@@ -205,6 +229,9 @@ class AppConfig:
                     height=data.get("window_height"),
                     x=data.get("window_x"),
                     y=data.get("window_y"),
+                ),
+                system=SystemConfig(
+                    minimize_to_tray=data.get("minimize_to_tray", False),
                 ),
             )
 

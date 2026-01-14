@@ -7,15 +7,20 @@ import threading
 from typing import Callable, Optional
 import io
 
+TRAY_AVAILABLE = False
+TRAY_ERROR: Optional[str] = None
+pystray = None
+Image = None
+ImageDraw = None
+
 try:
     import pystray
     from PIL import Image, ImageDraw
     TRAY_AVAILABLE = True
-except ImportError:
-    TRAY_AVAILABLE = False
-    pystray = None
-    Image = None
-    ImageDraw = None
+    TRAY_ERROR = None
+except ImportError as e:
+    TRAY_ERROR = str(e)
+    print(f"[Tray] Import failed: {TRAY_ERROR}")
 
 
 def is_tray_available() -> bool:
@@ -23,39 +28,44 @@ def is_tray_available() -> bool:
     return TRAY_AVAILABLE
 
 
+def get_tray_error() -> Optional[str]:
+    """Get the error message if tray is unavailable."""
+    return TRAY_ERROR
+
+
 def create_tray_icon() -> Optional["Image.Image"]:
     """Create a simple microphone icon for the system tray."""
     if not TRAY_AVAILABLE:
         return None
 
-    # Create a 64x64 image with transparent background
-    size = 64
-    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    # Create a 32x32 image with solid dark background (RGB, not RGBA - Windows compatible)
+    size = 32
+    image = Image.new('RGB', (size, size), (30, 30, 30))
     draw = ImageDraw.Draw(image)
 
-    # Draw a microphone shape
+    # Draw a microphone shape (scaled for 32x32)
     # Mic body (rounded rectangle)
-    mic_color = (255, 107, 53, 255)  # Orange accent color
+    mic_color = (255, 107, 53)  # Orange accent color (no alpha)
     draw.rounded_rectangle(
-        [(22, 8), (42, 36)],
-        radius=10,
+        [(11, 4), (21, 18)],
+        radius=5,
         fill=mic_color
     )
 
     # Mic stand (arc)
     draw.arc(
-        [(16, 20), (48, 48)],
+        [(8, 10), (24, 24)],
         start=0,
         end=180,
         fill=mic_color,
-        width=4
+        width=2
     )
 
     # Mic stand vertical line
-    draw.line([(32, 44), (32, 52)], fill=mic_color, width=4)
+    draw.line([(16, 22), (16, 26)], fill=mic_color, width=2)
 
     # Mic stand base
-    draw.line([(22, 52), (42, 52)], fill=mic_color, width=4)
+    draw.line([(11, 26), (21, 26)], fill=mic_color, width=2)
 
     return image
 
@@ -205,19 +215,19 @@ class SystemTray:
             return
 
         try:
-            # Create new icon with different color based on state
-            size = 64
-            image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+            # Create new icon with different color based on state (32x32 RGB for Windows)
+            size = 32
+            image = Image.new('RGB', (size, size), (30, 30, 30))
             draw = ImageDraw.Draw(image)
 
-            # Red when recording, orange otherwise
-            mic_color = (244, 67, 54, 255) if recording else (255, 107, 53, 255)
+            # Red when recording, orange otherwise (no alpha channel)
+            mic_color = (244, 67, 54) if recording else (255, 107, 53)
 
-            # Draw microphone
-            draw.rounded_rectangle([(22, 8), (42, 36)], radius=10, fill=mic_color)
-            draw.arc([(16, 20), (48, 48)], start=0, end=180, fill=mic_color, width=4)
-            draw.line([(32, 44), (32, 52)], fill=mic_color, width=4)
-            draw.line([(22, 52), (42, 52)], fill=mic_color, width=4)
+            # Draw microphone (scaled for 32x32)
+            draw.rounded_rectangle([(11, 4), (21, 18)], radius=5, fill=mic_color)
+            draw.arc([(8, 10), (24, 24)], start=0, end=180, fill=mic_color, width=2)
+            draw.line([(16, 22), (16, 26)], fill=mic_color, width=2)
+            draw.line([(11, 26), (21, 26)], fill=mic_color, width=2)
 
             self.icon.icon = image
             self.icon.title = "Claude Dictate - Recording..." if recording else "Claude Dictate"
