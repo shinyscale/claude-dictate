@@ -13,7 +13,7 @@ from .theme import THEME, FONTS, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MIN_WIDTH, 
 from .recorder import WaveformCanvas, StatusIndicator, ProgressBar, LoadingSpinner, GearSpinner, PulsingIndicator
 from .editor import TextEditor
 from .settings import SettingsPanel
-from .tray import SystemTray, is_tray_available, get_tray_error
+from .tray import SystemTray, is_tray_available, get_tray_error, create_tray_icon
 from .overlay import FloatingOverlay
 
 from ..main import ClaudeDictate, HotkeyListener, SimpleHotkeyListener
@@ -39,6 +39,9 @@ class ClaudeDictateGUI(ctk.CTk):
         # Configure window
         self.title("Claude Dictate")
         self.configure(fg_color=THEME["bg_dark"])
+
+        # Set taskbar icon (delayed to ensure window is ready)
+        self.after(100, self._set_window_icon)
 
         # Set appearance
         ctk.set_appearance_mode("dark")
@@ -87,6 +90,73 @@ class ClaudeDictateGUI(ctk.CTk):
 
         # FR-012: Bind focus-out event for click-away behavior (when tray mode enabled)
         self.bind("<FocusOut>", self._on_focus_out)
+
+    def _set_window_icon(self) -> None:
+        """Set the taskbar icon for the window."""
+        try:
+            import tempfile
+            import os
+            import sys
+            from PIL import Image, ImageDraw
+
+            # On Windows, set AppUserModelID so taskbar treats this as a separate app
+            if sys.platform == 'win32':
+                import ctypes
+                app_id = 'ClaudeDictate.VoiceToText.1.0'
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+
+            # Create icon with RGBA for proper Windows support
+            size = 64
+            image = Image.new('RGBA', (size, size), (30, 30, 30, 255))
+            draw = ImageDraw.Draw(image)
+
+            # Draw a microphone shape (scaled for 64x64)
+            mic_color = (255, 107, 53, 255)  # Orange accent color
+            scale = size / 32
+
+            # Mic body
+            draw.rounded_rectangle(
+                [(int(11*scale), int(4*scale)), (int(21*scale), int(18*scale))],
+                radius=int(5*scale),
+                fill=mic_color
+            )
+
+            # Mic stand (arc)
+            draw.arc(
+                [(int(8*scale), int(10*scale)), (int(24*scale), int(24*scale))],
+                start=0, end=180,
+                fill=mic_color,
+                width=int(2*scale)
+            )
+
+            # Mic stand vertical line
+            draw.line(
+                [(int(16*scale), int(22*scale)), (int(16*scale), int(26*scale))],
+                fill=mic_color, width=int(2*scale)
+            )
+
+            # Mic stand base
+            draw.line(
+                [(int(11*scale), int(26*scale)), (int(21*scale), int(26*scale))],
+                fill=mic_color, width=int(2*scale)
+            )
+
+            # Save as .ico file in app directory (more reliable than temp)
+            app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            ico_path = os.path.join(app_dir, "claude_dictate.ico")
+            image.save(ico_path, format='ICO')
+            print(f"[GUI] Created icon at {ico_path}")
+
+            # Set icon using wm_iconbitmap (more reliable on Windows)
+            if sys.platform == 'win32':
+                self.wm_iconbitmap(ico_path)
+            else:
+                self.iconbitmap(ico_path)
+            print(f"[GUI] Window icon set")
+        except Exception as e:
+            print(f"[GUI] Failed to set window icon: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _apply_window_geometry(self) -> None:
         """Apply saved window geometry or use defaults."""

@@ -159,7 +159,8 @@ class WhisperTranscriber:
                 self.on_progress(0.3, "Loading whisper model...")
 
             model_name = self.model.replace(".en", "")
-            model = whisper.load_model(model_name)
+            # Force CPU - Blackwell GPUs (sm_120) not yet supported by PyTorch
+            model = whisper.load_model(model_name, device="cpu")
 
             if self.on_progress:
                 self.on_progress(0.5, "Transcribing with Python whisper...")

@@ -6,6 +6,9 @@ setlocal enabledelayedexpansion
 
 echo Starting Claude Dictate...
 
+:: Force CPU mode - Blackwell GPUs (sm_120) not yet supported by PyTorch
+set CUDA_VISIBLE_DEVICES=
+
 :: Check if Python is available
 where python >nul 2>&1
 if %errorlevel% neq 0 (
