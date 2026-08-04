@@ -17,6 +17,7 @@ from .transcriber import WhisperTranscriber
 from .refiner import LLMRefiner
 from .exporter import OutputGenerator
 from .config import AppConfig, DEFAULT_CONFIG
+from .history import append_entry as history_append
 import pyperclip
 
 
@@ -318,6 +319,11 @@ class ClaudeDictate:
 
         self.current_transcription = self.transcriber.transcribe(audio_path)
 
+        # To disk before anything else touches it: a crash, a dead LLM, or a
+        # clipboard overwrite later can no longer lose the dictation.
+        if self.current_transcription:
+            history_append("raw", self.current_transcription)
+
         # Clean up temp file
         try:
             os.unlink(audio_path)
@@ -356,6 +362,9 @@ class ClaudeDictate:
         print(f"[main.py] Calling refiner.refine() with {len(text)} chars...")
         self.current_refined = self.refiner.refine(text, style)
         print(f"[main.py] refiner.refine() returned: {len(self.current_refined) if self.current_refined else 0} chars")
+
+        if self.current_refined:
+            history_append("refined", self.current_refined)
 
         if self.on_refinement_complete:
             print(f"[main.py] Triggering on_refinement_complete callback")

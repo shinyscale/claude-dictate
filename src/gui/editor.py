@@ -7,6 +7,7 @@ import customtkinter as ctk
 import pyperclip
 
 from .theme import THEME, FONTS
+from .widgets import Tooltip
 
 
 class TextEditor(ctk.CTkFrame):
@@ -40,7 +41,8 @@ class TextEditor(ctk.CTkFrame):
         )
         self.title_label.pack(side="left")
 
-        # Copy button (hidden by default, shown on hover)
+        # Hover-revealed action buttons: copy and clear live with the text
+        # they act on, so their meaning needs no guessing.
         self.copy_btn = ctk.CTkButton(
             header,
             text="📋",
@@ -53,6 +55,22 @@ class TextEditor(ctk.CTkFrame):
             corner_radius=6,
             command=self._copy_to_clipboard
         )
+        Tooltip(self.copy_btn, f"Copy the {title.lower()}")
+
+        self.clear_btn = ctk.CTkButton(
+            header,
+            text="🗑",
+            font=("", 14),
+            width=32,
+            height=28,
+            fg_color="transparent",
+            hover_color=THEME["bg_medium"],
+            text_color=THEME["text_muted"],
+            corner_radius=6,
+            command=self._clear_clicked
+        )
+        Tooltip(self.clear_btn, f"Clear the {title.lower()}")
+
         # Initially hidden - pack_forget() isn't needed since we haven't packed it yet
         self._copy_btn_visible = False
 
@@ -90,9 +108,10 @@ class TextEditor(ctk.CTkFrame):
         header.bind("<Leave>", self._on_mouse_leave)
 
     def _on_mouse_enter(self, event=None) -> None:
-        """Show copy button when mouse enters the editor."""
+        """Show action buttons when mouse enters the editor."""
         if not self._copy_btn_visible and self.get_text().strip():
             self.copy_btn.pack(side="right", padx=(0, 8))
+            self.clear_btn.pack(side="right", padx=(0, 2))
             self._copy_btn_visible = True
 
     def _on_mouse_leave(self, event=None) -> None:
@@ -110,6 +129,7 @@ class TextEditor(ctk.CTkFrame):
                     widget_y <= y <= widget_y + widget_h):
                 if self._copy_btn_visible:
                     self.copy_btn.pack_forget()
+                    self.clear_btn.pack_forget()
                     self._copy_btn_visible = False
         except Exception:
             pass
@@ -125,6 +145,16 @@ class TextEditor(ctk.CTkFrame):
             self.after(800, lambda: self.copy_btn.configure(
                 text="📋", text_color=original_color
             ))
+
+    def _clear_clicked(self) -> None:
+        """Clear this panel with a brief confirmation flash."""
+        if not self.get_text().strip():
+            return
+        self.clear()
+        self.clear_btn.configure(text="✓", text_color=THEME["success"])
+        self.after(800, lambda: self.clear_btn.configure(
+            text="🗑", text_color=THEME["text_muted"]
+        ))
 
     def get_text(self) -> str:
         """Get text content."""

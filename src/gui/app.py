@@ -13,11 +13,13 @@ from .theme import THEME, FONTS, resolve_fonts, WINDOW_WIDTH, WINDOW_HEIGHT, WIN
 from .recorder import WaveformCanvas, StatusIndicator, ProgressBar, LoadingSpinner, GearSpinner, PulsingIndicator
 from .editor import TextEditor
 from .settings import SettingsPanel
+from .widgets import Tooltip, HistoryPanel
 from .tray import SystemTray, is_tray_available, get_tray_error, create_tray_icon
 from .overlay import FloatingOverlay
 
 from ..main import ClaudeDictate, HotkeyListener, SimpleHotkeyListener
 from ..config import DEFAULT_CONFIG, AppConfig
+from ..history import history_path, read_session_entries
 
 
 def is_running_in_wsl() -> bool:
@@ -247,10 +249,20 @@ class ClaudeDictateGUI(ctk.CTk):
 
         self._create_control_panel(self.left_scroll)
 
-        # Right panel - Text editors
+        # Session history sidebar (rightmost; collapsible). Packed before the
+        # editors so pack gives the editors whatever space remains.
+        self.history_panel = HistoryPanel(content)
+        self.history_panel.pack(side="right", fill="y", padx=(16, 0))
+
+        # Center panel - Text editors
         right_panel = ctk.CTkFrame(content, fg_color="transparent")
         right_panel.pack(side="left", fill="both", expand=True)
         self._create_editor_panel(right_panel)
+
+        # The history file is shared with the tray daemon, so poll its mtime:
+        # dictations made anywhere appear in the panel within a second or two.
+        self._history_mtime = 0.0
+        self.after(400, self._poll_history)
 
     def _create_header(self) -> None:
         """Create header with title and settings."""
@@ -265,7 +277,7 @@ class ClaudeDictateGUI(ctk.CTk):
         ctk.CTkLabel(
             title_frame,
             text="◉",
-            font=("SF Pro Display", 32),
+            font=(FONTS["title"][0], 32),
             text_color=THEME["accent"]
         ).pack(side="left", padx=(0, 12))
 
@@ -277,16 +289,18 @@ class ClaudeDictateGUI(ctk.CTk):
         ).pack(side="left")
 
         # Settings button
-        ctk.CTkButton(
+        settings_btn = ctk.CTkButton(
             header,
             text="⚙",
-            font=("SF Pro Display", 20),
+            font=(FONTS["title"][0], 20),
             width=44,
             height=44,
             fg_color="transparent",
             hover_color=THEME["bg_light"],
             command=self._open_settings
-        ).pack(side="right")
+        )
+        settings_btn.pack(side="right")
+        Tooltip(settings_btn, "Settings")
 
         # Status indicator
         self.status = StatusIndicator(header)
@@ -309,72 +323,33 @@ class ClaudeDictateGUI(ctk.CTk):
             text_color=THEME["text_secondary"]
         ).pack(side="left", padx=(0, 8))
 
-        # Copy button
-        ctk.CTkButton(
-            export_frame,
-            text="📋 Copy",
-            font=FONTS["small"],
-            width=75,
-            height=34,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["bg_dark"],
-            command=self._copy_to_clipboard
-        ).pack(side="left", padx=4)
+        # Export buttons, each explained on hover. The old toolbar trashcan
+        # moved into the editor panels, next to the text it clears.
+        for label, tip, width, command in (
+            ("📋 Copy", "Copy refined text (or raw if not refined)", 75, self._copy_to_clipboard),
+            ("📝 .md", "Save as a Markdown file", 70, self._save_markdown),
+            ("📄 .prd", "Save as a Product Requirements Document", 70, self._save_prd),
+            ("🚀 Prompt", "Save as a Claude Code prompt", 90, self._save_prompt),
+        ):
+            btn = ctk.CTkButton(
+                export_frame,
+                text=label,
+                font=FONTS["small"],
+                width=width,
+                height=34,
+                fg_color=THEME["bg_medium"],
+                hover_color=THEME["bg_dark"],
+                command=command
+            )
+            btn.pack(side="left", padx=4)
+            Tooltip(btn, tip)
 
-        # Save as .md
-        ctk.CTkButton(
-            export_frame,
-            text="📝 .md",
-            font=FONTS["small"],
-            width=70,
-            height=34,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["bg_dark"],
-            command=self._save_markdown
-        ).pack(side="left", padx=4)
-
-        # Save as .prd
-        ctk.CTkButton(
-            export_frame,
-            text="📄 .prd",
-            font=FONTS["small"],
-            width=70,
-            height=34,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["bg_dark"],
-            command=self._save_prd
-        ).pack(side="left", padx=4)
-
-        # Save as Prompt
-        ctk.CTkButton(
-            export_frame,
-            text="🚀 Prompt",
-            font=FONTS["small"],
-            width=90,
-            height=34,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["bg_dark"],
-            command=self._save_prompt
-        ).pack(side="left", padx=4)
-
-        # Right side - Output directory and Clear
+        # Right side - Output directory
         right_frame = ctk.CTkFrame(toolbar, fg_color="transparent")
         right_frame.pack(side="right", fill="y", padx=12)
 
-        # Clear button
-        ctk.CTkButton(
-            right_frame,
-            text="🗑️",
-            font=FONTS["small"],
-            width=40,
-            height=34,
-            fg_color=THEME["bg_medium"],
-            hover_color=THEME["error"],
-            command=self._clear_editors
-        ).pack(side="right", padx=(8, 0))
-
         # Output directory browse button
-        ctk.CTkButton(
+        browse_btn = ctk.CTkButton(
             right_frame,
             text="📁",
             font=FONTS["small"],
@@ -383,7 +358,9 @@ class ClaudeDictateGUI(ctk.CTk):
             fg_color=THEME["action_green"],
             hover_color=THEME["action_green_hover"],
             command=self._browse_output_dir
-        ).pack(side="right")
+        )
+        browse_btn.pack(side="right")
+        Tooltip(browse_btn, "Choose the output folder for saved files")
 
         # Output directory entry
         self.output_dir_var = ctk.StringVar(value=self.config.get("output_dir", "./outputs"))
@@ -757,6 +734,20 @@ class ClaudeDictateGUI(ctk.CTk):
         self.raw_editor.clear()
         self.refined_editor.clear()
         self.status.set_status("Cleared", THEME["text_muted"])
+
+    def _poll_history(self) -> None:
+        """Refresh the session-history panel when the shared file changes."""
+        try:
+            mtime = history_path().stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        if mtime != self._history_mtime:
+            self._history_mtime = mtime
+            try:
+                self.history_panel.refresh(read_session_entries())
+            except Exception as e:
+                print(f"[GUI] History refresh failed: {e}")
+        self.after(1500, self._poll_history)
 
     def _browse_output_dir(self) -> None:
         """Open directory browser for output directory selection."""
