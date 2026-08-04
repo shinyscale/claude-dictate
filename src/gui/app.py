@@ -9,7 +9,7 @@ from typing import Optional
 
 import customtkinter as ctk
 
-from .theme import THEME, FONTS, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT, LEFT_PANEL_WIDTH
+from .theme import THEME, FONTS, resolve_fonts, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT, LEFT_PANEL_WIDTH
 from .recorder import WaveformCanvas, StatusIndicator, ProgressBar, LoadingSpinner, GearSpinner, PulsingIndicator
 from .editor import TextEditor
 from .settings import SettingsPanel
@@ -35,6 +35,10 @@ class ClaudeDictateGUI(ctk.CTk):
 
     def __init__(self):
         super().__init__()
+
+        # Needs a live Tk interpreter to enumerate installed families, so it
+        # runs after the root exists and before any widget is built.
+        resolve_fonts()
 
         # Configure window
         self.title("Claude Dictate")
@@ -75,12 +79,9 @@ class ClaudeDictateGUI(ctk.CTk):
         # Connect waveform to audio level updates
         self.app.recorder.on_level_update = self._on_audio_level
 
-        # Initialize floating overlay for recording feedback
-        self.overlay = FloatingOverlay(
-            self,
-            on_copy=self._copy_to_clipboard,
-            on_clear=self._clear_editors
-        )
+        # Initialize floating overlay for recording feedback. It carries no
+        # controls of its own -- Copy/Clear live in this window's toolbar.
+        self.overlay = FloatingOverlay(self)
 
         # Initialize system tray if enabled
         self._init_system_tray()
