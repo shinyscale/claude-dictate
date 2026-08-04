@@ -14,7 +14,7 @@ import shutil
 # Default configuration dict (for backwards compatibility)
 DEFAULT_CONFIG = {
     "whisper_cpp_path": "",
-    "whisper_model": "base.en",
+    "whisper_model": "large-v3-turbo",
     "sample_rate": 16000,
     "channels": 1,
     "chunk_size": 1024,
@@ -40,7 +40,7 @@ DEFAULT_CONFIG = {
 class WhisperConfig:
     """Whisper transcription configuration."""
     executable_path: str = ""
-    model: str = "base.en"
+    model: str = "large-v3-turbo"
     language: str = "en"
 
 
