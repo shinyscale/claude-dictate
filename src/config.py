@@ -62,6 +62,8 @@ DEFAULT_CONFIG = {
     "default_model": "deepseek-ai/DeepSeek-V4-Flash-0731",
     "system_prompt": "",
     "output_dir": "./outputs",
+    "paste_mode": "raw",
+    "verify_window": True,
     "minimize_to_tray": False,
     # Window geometry (None means use defaults)
     "window_width": None,
@@ -120,6 +122,13 @@ class OutputConfig:
     """Output configuration."""
     output_dir: str = "./outputs"
     default_format: str = "clipboard"  # clipboard, md, prd, prompt
+    # Daemon paste behavior. "raw" pastes the transcription as-is (whisper
+    # output is already punctuated and clean); "refined" runs the LLM pass
+    # first. Raw is the default: it's instant and can't hallucinate.
+    paste_mode: str = "raw"  # raw | refined
+    # Only auto-paste if the window focused when the hotkey was released is
+    # still focused when processing finishes; otherwise leave on clipboard.
+    verify_window: bool = True
 
 
 @dataclass
@@ -224,6 +233,8 @@ class AppConfig:
             "default_model": self.llm.model,
             "system_prompt": self.llm.system_prompt,
             "output_dir": self.output.output_dir,
+            "paste_mode": self.output.paste_mode,
+            "verify_window": self.output.verify_window,
             "minimize_to_tray": self.system.minimize_to_tray,
             "window_width": self.window.width,
             "window_height": self.window.height,
@@ -282,6 +293,8 @@ class AppConfig:
                 ),
                 output=OutputConfig(
                     output_dir=data.get("output_dir", "./outputs"),
+                    paste_mode=data.get("paste_mode", "raw"),
+                    verify_window=data.get("verify_window", True),
                 ),
                 window=WindowConfig(
                     width=data.get("window_width"),

@@ -51,6 +51,9 @@ STATES = {
     "transcribing": ("Transcribing", THEME["warning"],    "scan", None),
     "refining":     ("Refining",     THEME["accent"],     "scan", None),
     "pasted":       ("Pasted",       THEME["success"],    "flat", 1800),
+    # Paste withheld because the focused window changed mid-dictation; the
+    # text is on the clipboard instead of in the wrong app.
+    "held":         ("On clipboard", THEME["warning"],    "flat", 3000),
     "empty":        ("No audio",     THEME["text_muted"], "flat", 2200),
     "error":        ("Failed",       THEME["error"],      "flat", 3000),
 }
@@ -416,6 +419,10 @@ class FloatingOverlay(ctk.CTkToplevel):
     def show_pasted(self, transcript: str = "") -> None:
         self._transcript = transcript
         self.set_state("pasted")
+
+    def show_held(self, transcript: str = "") -> None:
+        self._transcript = transcript
+        self.set_state("held")
 
     def show_empty(self) -> None:
         self._transcript = ""

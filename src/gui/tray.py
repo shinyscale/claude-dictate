@@ -77,7 +77,9 @@ class SystemTray:
         self,
         on_show: Optional[Callable] = None,
         on_settings: Optional[Callable] = None,
-        on_exit: Optional[Callable] = None
+        on_exit: Optional[Callable] = None,
+        paste_mode_getter: Optional[Callable[[], str]] = None,
+        on_paste_mode_change: Optional[Callable[[str], None]] = None,
     ):
         """
         Initialize the system tray.
@@ -86,10 +88,15 @@ class SystemTray:
             on_show: Callback when "Show" is clicked
             on_settings: Callback when "Settings" is clicked
             on_exit: Callback when "Exit" is clicked
+            paste_mode_getter: Returns "raw" or "refined"; when provided,
+                the menu grows a radio pair for switching paste modes
+            on_paste_mode_change: Called with the newly selected mode
         """
         self.on_show = on_show
         self.on_settings = on_settings
         self.on_exit = on_exit
+        self.paste_mode_getter = paste_mode_getter
+        self.on_paste_mode_change = on_paste_mode_change
         self.icon: Optional["pystray.Icon"] = None
         self._running = False
         self._ready = threading.Event()
@@ -100,13 +107,33 @@ class SystemTray:
         if not TRAY_AVAILABLE:
             return None
 
-        return pystray.Menu(
+        items = [
             pystray.MenuItem(
                 "Show Claude Dictate",
                 self._on_show,
                 default=True  # Double-click action
             ),
             pystray.Menu.SEPARATOR,
+        ]
+
+        if self.paste_mode_getter:
+            items += [
+                pystray.MenuItem(
+                    "Paste raw transcript",
+                    lambda icon, item: self._set_paste_mode("raw"),
+                    checked=lambda item: self.paste_mode_getter() == "raw",
+                    radio=True,
+                ),
+                pystray.MenuItem(
+                    "Refine, then paste",
+                    lambda icon, item: self._set_paste_mode("refined"),
+                    checked=lambda item: self.paste_mode_getter() == "refined",
+                    radio=True,
+                ),
+                pystray.Menu.SEPARATOR,
+            ]
+
+        items += [
             pystray.MenuItem(
                 "Settings",
                 self._on_settings
@@ -116,7 +143,14 @@ class SystemTray:
                 "Exit",
                 self._on_exit
             )
-        )
+        ]
+        return pystray.Menu(*items)
+
+    def _set_paste_mode(self, mode: str) -> None:
+        if self.on_paste_mode_change:
+            self.on_paste_mode_change(mode)
+        if self.icon:
+            self.icon.update_menu()
 
     def _on_show(self, icon, item) -> None:
         """Handle Show menu item click."""

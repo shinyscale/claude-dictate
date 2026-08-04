@@ -14,9 +14,10 @@ REFINEMENT_PROMPTS = {
 - Fix grammar and punctuation
 - Remove filler words (um, uh, like, you know, basically, actually)
 - Remove false starts and self-corrections
-- Improve sentence flow and readability
+- Delete pure-filler sentences entirely (e.g. "Let's see. We'll see. Okay.")
+- Keep the speaker's original wording wherever it already reads fine; do not paraphrase
+- NEVER add words, names, facts, or ideas that are not in the transcription
 - Preserve the original meaning, tone, and personality
-- Keep it natural - don't make it sound robotic
 
 Transcription:
 {text}

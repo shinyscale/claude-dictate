@@ -67,6 +67,62 @@ def apply_corrections(text: str, corrections: Optional[Dict[str, str]]) -> str:
     return text
 
 
+_PUNCT_WORDS = re.compile(
+    r"\b(exclamation\s+(?:point|mark)|question\s+mark)\b", re.IGNORECASE
+)
+
+
+def apply_spoken_punctuation(text: str) -> str:
+    """
+    Convert spoken 'exclamation point' / 'question mark' into the symbols.
+
+    Attachment depends on position. At the start of the text or of a sentence
+    the mark is a prefix sigil and glues to the NEXT word ("exclamation point
+    opus" -> "!opus", the Telegram model-routing case). Anywhere else it
+    terminates the PREVIOUS word ("ship it exclamation point" -> "ship it!"),
+    also swallowing the duplicate terminator Whisper tends to add after the
+    spoken words ("... exclamation point." would otherwise become "...!.").
+
+    Deliberately limited to these two marks: spoken commas/periods are far
+    more likely to appear as ordinary words than as dictated punctuation.
+    """
+    if not text:
+        return text
+
+    out = []
+    pos = 0
+    for m in _PUNCT_WORDS.finditer(text):
+        symbol = "!" if m.group(1).lower().startswith("exclamation") else "?"
+        before = text[pos:m.start()]
+        context = text[:m.start()].rstrip()
+        end = m.end()
+
+        if not context or context[-1] in ".!?\n":
+            # Prefix sigil: keep leading whitespace, glue symbol to what follows.
+            out.append(before)
+            out.append(symbol)
+            while end < len(text) and text[end] == " ":
+                end += 1
+        else:
+            # Terminator: glue symbol to what precedes, drop any duplicate
+            # punctuation Whisper appended, restore a single space if the
+            # sentence continues.
+            out.append(before.rstrip())
+            out.append(symbol)
+            while end < len(text) and text[end] == " ":
+                end += 1
+            if end < len(text) and text[end] in ".,!?":
+                end += 1
+                while end < len(text) and text[end] == " ":
+                    end += 1
+            if end < len(text):
+                out.append(" ")
+        pos = end
+
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def _load_faster_whisper(model: str, device: str, compute_type: str):
     """Get (or build) a cached faster-whisper model. Raises if unavailable."""
     key = (model, device, compute_type)
@@ -171,7 +227,8 @@ class WhisperTranscriber:
 
         # Single exit point so corrections are applied exactly once, whichever
         # backend produced the text.
-        return apply_corrections(text, self.corrections)
+        text = apply_corrections(text, self.corrections)
+        return apply_spoken_punctuation(text)
 
     def _transcribe_faster_whisper(self, audio_path: str) -> Optional[str]:
         """
