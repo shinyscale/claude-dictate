@@ -260,11 +260,15 @@ class ClaudeDictate:
             whisper_path=self.config.get("whisper_cpp_path", ""),
             model=self.config.get("whisper_model", "base.en")
         )
-        llm_backend = self.config.get("default_llm", "ollama")
+        llm_backend = self.config.get("default_llm", "f235")
+        backend_url_key = {
+            "ollama": "ollama_url",
+            "f235": "f235_url",
+        }.get(llm_backend, "lm_studio_url")
         self.refiner = LLMRefiner(
             backend=llm_backend,
-            model=self.config.get("default_model", "llama3.2"),
-            base_url=self.config.get("ollama_url" if llm_backend == "ollama" else "lm_studio_url", ""),
+            model=self.config.get("default_model", "deepseek-ai/DeepSeek-V4-Flash-0731"),
+            base_url=self.config.get(backend_url_key, ""),
             system_prompt=self.config.get("system_prompt", "")
         )
         self.output_gen = OutputGenerator(
@@ -432,7 +436,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Claude Dictate - Voice-to-Text for Claude Code"
     )
-    parser.add_argument("--gui", action="store_true", help="Launch GUI mode")
+    parser.add_argument("--gui", action="store_true", help="Launch the full editor window")
+    parser.add_argument("--daemon", action="store_true", help="Run as background tray daemon with global hotkey (default)")
     parser.add_argument("--record", action="store_true", help="Record and transcribe once")
     parser.add_argument("--refine", type=str, help="Refine text from file or stdin")
     parser.add_argument(
@@ -453,18 +458,22 @@ def main():
     parser.add_argument(
         "--llm",
         type=str,
-        choices=["ollama", "lm_studio"],
-        default="ollama",
+        choices=["ollama", "lm_studio", "f235"],
+        default="f235",
         help="LLM backend"
     )
-    parser.add_argument("--model", type=str, default="llama3.2", help="LLM model name")
+    parser.add_argument("--model", type=str, default="deepseek-ai/DeepSeek-V4-Flash-0731", help="LLM model name")
 
     args = parser.parse_args()
 
     if args.gui:
-        # Import and run GUI
+        # Import and run the full editor window
         from .gui import run_gui
         run_gui()
+    elif args.daemon:
+        # Background tray daemon with global hold-to-talk hotkey (no main window)
+        from .gui import run_daemon
+        run_daemon()
     elif args.record:
         # Single recording mode
         app = ClaudeDictate()
@@ -515,10 +524,10 @@ def main():
 
         app.cleanup()
     else:
-        # Default: launch GUI
+        # Default: launch as background tray daemon (hold hotkey anywhere, no window)
         try:
-            from .gui import run_gui
-            run_gui()
+            from .gui import run_daemon
+            run_daemon()
         except ImportError as e:
             print(f"GUI dependencies not found: {e}")
             print("Run with --record for CLI mode.")

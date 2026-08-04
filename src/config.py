@@ -23,8 +23,9 @@ DEFAULT_CONFIG = {
     "clear_hotkey": "ctrl+alt+x",
     "ollama_url": "http://localhost:11434",
     "lm_studio_url": "http://localhost:1234/v1",
-    "default_llm": "ollama",
-    "default_model": "llama3.2",
+    "f235_url": "http://spark-f235:8000/v1",
+    "default_llm": "f235",
+    "default_model": "deepseek-ai/DeepSeek-V4-Flash-0731",
     "system_prompt": "",
     "output_dir": "./outputs",
     "minimize_to_tray": False,
@@ -56,10 +57,11 @@ class AudioConfig:
 @dataclass
 class LLMConfig:
     """LLM refinement configuration."""
-    backend: str = "ollama"  # ollama or lm_studio
-    model: str = "llama3.2"
+    backend: str = "f235"  # ollama, lm_studio, or f235
+    model: str = "deepseek-ai/DeepSeek-V4-Flash-0731"
     ollama_url: str = "http://localhost:11434"
     lm_studio_url: str = "http://localhost:1234/v1"
+    f235_url: str = "http://spark-f235:8000/v1"
     temperature: float = 0.3
     max_tokens: int = 2048
     system_prompt: str = ""
@@ -169,6 +171,7 @@ class AppConfig:
             "clear_hotkey": self.hotkey.clear_hotkey,
             "ollama_url": self.llm.ollama_url,
             "lm_studio_url": self.llm.lm_studio_url,
+            "f235_url": self.llm.f235_url,
             "default_llm": self.llm.backend,
             "default_model": self.llm.model,
             "system_prompt": self.llm.system_prompt,
@@ -211,10 +214,11 @@ class AppConfig:
                     device_index=data.get("audio_device_index"),
                 ),
                 llm=LLMConfig(
-                    backend=data.get("default_llm", "ollama"),
-                    model=data.get("default_model", "llama3.2"),
+                    backend=data.get("default_llm", "f235"),
+                    model=data.get("default_model", "deepseek-ai/DeepSeek-V4-Flash-0731"),
                     ollama_url=data.get("ollama_url", "http://localhost:11434"),
                     lm_studio_url=data.get("lm_studio_url", "http://localhost:1234/v1"),
+                    f235_url=data.get("f235_url", "http://spark-f235:8000/v1"),
                     system_prompt=data.get("system_prompt", ""),
                 ),
                 hotkey=HotkeyConfig(

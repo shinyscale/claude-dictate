@@ -43,6 +43,8 @@ class LLMRefiner:
 
         if backend == "ollama":
             self.base_url = base_url or "http://localhost:11434"
+        elif backend == "f235":
+            self.base_url = base_url or "http://spark-f235:8000/v1"
         else:  # lm_studio
             self.base_url = base_url or "http://localhost:1234/v1"
 
