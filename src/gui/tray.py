@@ -189,6 +189,10 @@ class SystemTray:
 
     def _on_setup(self, icon) -> None:
         """Called when tray icon is ready."""
+        # Passing a custom setup= to icon.run() replaces pystray's default
+        # setup, which is the thing that sets visible=True. Without this line
+        # the icon runs headless: menu and all, but never shown in the tray.
+        icon.visible = True
         print("[Tray] Icon setup complete, tray is visible")
         if hasattr(self, '_ready'):
             self._ready.set()

@@ -173,7 +173,10 @@ class AppConfig:
 
         if config_path.exists():
             try:
-                with open(config_path, "r", encoding="utf-8") as f:
+                # utf-8-sig: tolerate a BOM from Notepad/PowerShell edits, which
+                # plain utf-8 rejects — and a parse failure here silently
+                # reverts every setting to defaults.
+                with open(config_path, "r", encoding="utf-8-sig") as f:
                     data = json.load(f)
                 return cls.from_dict(data)
             except (json.JSONDecodeError, KeyError) as e:

@@ -510,7 +510,7 @@ class SettingsPanel(ctk.CTkToplevel):
             content,
             "Active Backend:",
             self.llm_backend_var,
-            ["ollama", "lm_studio"]
+            ["ollama", "lm_studio", "f235"]
         )
 
         # === Whisper Settings ===

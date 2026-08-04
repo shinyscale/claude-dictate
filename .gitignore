@@ -76,3 +76,8 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Daemon runtime logs and shortcuts
+daemon.log
+daemon.err.log
+*.lnk
