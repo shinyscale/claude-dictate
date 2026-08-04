@@ -3,12 +3,29 @@ Floating recording overlay for Claude Dictate
 Shows a small always-on-top window during recording with waveform and controls.
 """
 
+import ctypes
+import sys
 import tkinter as tk
 from typing import Callable, Optional
 
 import customtkinter as ctk
 
 from .theme import THEME, FONTS
+
+# Win32 constants for keeping the overlay from ever taking keyboard focus.
+# The daemon pastes with a synthetic Ctrl+V into whatever window the user was
+# already typing in; if this overlay steals foreground on show, that paste
+# lands here instead of in their editor.
+_GWL_EXSTYLE = -20
+_WS_EX_NOACTIVATE = 0x08000000
+_WS_EX_TOOLWINDOW = 0x00000080  # also keeps the overlay out of Alt-Tab
+_HWND_TOPMOST = -1
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOACTIVATE = 0x0010
+_SWP_SHOWWINDOW = 0x0040
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 class MiniWaveform(ctk.CTkFrame):
@@ -246,7 +263,9 @@ class FloatingOverlay(ctk.CTkToplevel):
         # Copy button
         self.copy_btn = ctk.CTkButton(
             self.button_row,
-            text="📋 Copy",
+            # Plain text, not emoji: U+1F4CB/U+1F5D1 are outside the BMP and
+            # Tk on Windows renders them as tofu (or raises on Tcl < 8.6.10).
+            text="Copy",
             font=FONTS["small"],
             width=80,
             height=28,
@@ -259,7 +278,7 @@ class FloatingOverlay(ctk.CTkToplevel):
         # Clear button
         self.clear_btn = ctk.CTkButton(
             self.button_row,
-            text="🗑 Clear",
+            text="Clear",
             font=FONTS["small"],
             width=80,
             height=28,
@@ -275,10 +294,72 @@ class FloatingOverlay(ctk.CTkToplevel):
         # Start hidden
         self.withdraw()
 
+        # Never let the overlay become the foreground window (see module notes)
+        self._apply_no_activate()
+
         # Make window draggable
         self._drag_data = {"x": 0, "y": 0}
         self.container.bind("<Button-1>", self._start_drag)
         self.container.bind("<B1-Motion>", self._do_drag)
+
+    # -- focus containment (Windows) ---------------------------------------
+
+    def _hwnd(self) -> int:
+        """Native handle for this Toplevel, or 0 if it isn't realized yet."""
+        try:
+            wid = self.winfo_id()
+        except tk.TclError:
+            return 0
+        # An overrideredirect Toplevel is its own top-level HWND, but a
+        # decorated one is a child of a Tk-owned frame; prefer the parent
+        # when there is one so the style lands on the real window.
+        parent = ctypes.windll.user32.GetParent(wid)
+        return parent or wid
+
+    def _apply_no_activate(self) -> None:
+        """
+        Mark the overlay WS_EX_NOACTIVATE so Windows refuses to give it
+        keyboard focus, no matter how it is shown or clicked.
+
+        Without this, deiconify()/lift() can pull foreground away from the
+        user's editor, and the daemon's Ctrl+V (sent ~50ms later) pastes the
+        transcript into the overlay instead of where they were typing.
+        """
+        if not _IS_WINDOWS:
+            return
+        try:
+            self.update_idletasks()  # ensure the HWND exists
+            hwnd = self._hwnd()
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            user32.GetWindowLongW.restype = ctypes.c_long
+            style = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            user32.SetWindowLongW(
+                hwnd, _GWL_EXSTYLE,
+                style | _WS_EX_NOACTIVATE | _WS_EX_TOOLWINDOW,
+            )
+        except Exception as e:  # pragma: no cover - platform specific
+            print(f"[Overlay] Could not apply no-activate style: {e}")
+
+    def _raise_without_focus(self) -> None:
+        """Bring the overlay to the front without activating it."""
+        if _IS_WINDOWS:
+            hwnd = self._hwnd()
+            if hwnd:
+                try:
+                    ctypes.windll.user32.SetWindowPos(
+                        hwnd, _HWND_TOPMOST, 0, 0, 0, 0,
+                        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE | _SWP_SHOWWINDOW,
+                    )
+                    return
+                except Exception as e:  # pragma: no cover - platform specific
+                    print(f"[Overlay] SetWindowPos failed, falling back to lift(): {e}")
+        # Non-Windows (or Win32 call failed): lift() may briefly take focus,
+        # which is the behaviour we are trying to avoid, but a visible overlay
+        # beats an invisible one.
+        self.lift()
+        self.attributes("-topmost", True)
 
     def _center_on_screen(self) -> None:
         """Position window at top-center of screen."""
@@ -317,10 +398,12 @@ class FloatingOverlay(ctk.CTkToplevel):
         # Start waveform
         self.waveform.start()
 
-        # Show window
+        # Show window. deiconify() alone can hand foreground to the overlay on
+        # Windows; _apply_no_activate is re-asserted because a withdraw/
+        # deiconify cycle can drop the extended style on some Tk builds.
         self.deiconify()
-        self.lift()
-        self.attributes("-topmost", True)
+        self._apply_no_activate()
+        self._raise_without_focus()
 
         print("[Overlay] Showing recording state")
 

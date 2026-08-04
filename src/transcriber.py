@@ -12,11 +12,12 @@ model that is already resident in VRAM.
 """
 
 import os
+import re
 import subprocess
 import shutil
 import threading
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Callable, Dict, List, Optional
 
 # faster-whisper accepts its own model ids; translate the legacy names the
 # config/UI still hand us so old settings files keep working.
@@ -32,6 +33,38 @@ DEFAULT_FW_MODEL = "large-v3-turbo"
 # daemon may transcribe from a worker thread while the UI thread preloads.
 _model_cache = {}
 _model_lock = threading.Lock()
+
+
+def build_initial_prompt(terms: Optional[List[str]]) -> str:
+    """
+    Turn a vocabulary list into a Whisper initial_prompt.
+
+    Whisper conditions the decoder on this text as if it were the transcript
+    of the preceding audio, which biases it toward these spellings. It is a
+    nudge, not a constraint -- the model can still emit anything -- so the
+    prompt reads as a plain sentence rather than a bare word list, which is
+    what the decoder was trained on.
+    """
+    cleaned = [t.strip() for t in (terms or []) if t and t.strip()]
+    if not cleaned:
+        return ""
+    return "Glossary for this recording: " + ", ".join(cleaned) + "."
+
+
+def apply_corrections(text: str, corrections: Optional[Dict[str, str]]) -> str:
+    """
+    Deterministic post-decode fix-ups for words Whisper reliably mangles.
+
+    Matched case-insensitively on word boundaries. Longer keys are applied
+    first so a two-word phrase wins over a single-word key nested inside it.
+    """
+    if not text or not corrections:
+        return text
+    for wrong in sorted(corrections, key=len, reverse=True):
+        right = corrections[wrong]
+        pattern = r"\b" + re.escape(wrong) + r"\b"
+        text = re.sub(pattern, right, text, flags=re.IGNORECASE)
+    return text
 
 
 def _load_faster_whisper(model: str, device: str, compute_type: str):
@@ -66,6 +99,8 @@ class WhisperTranscriber:
         on_progress: Optional[Callable[[float, str], None]] = None,
         device: str = "auto",
         compute_type: str = "float16",
+        vocabulary: Optional[List[str]] = None,
+        corrections: Optional[Dict[str, str]] = None,
     ):
         """
         Args:
@@ -75,12 +110,16 @@ class WhisperTranscriber:
             on_progress: Callback (progress 0-1, status message)
             device: "auto" | "cuda" | "cpu" for the faster-whisper backend
             compute_type: CTranslate2 compute type (float16 on CUDA, int8 on CPU)
+            vocabulary: Personal jargon to bias the decoder toward
+            corrections: Misheard -> correct map applied after decoding
         """
         self.whisper_path = whisper_path or self._find_whisper()
         self.model = model
         self.language = language
         self.model_path = self._get_model_path()
         self.on_progress = on_progress
+        self.vocabulary = list(vocabulary or [])
+        self.corrections = dict(corrections or {})
 
         if device == "auto":
             device = "cuda" if cuda_available() else "cpu"
@@ -93,6 +132,11 @@ class WhisperTranscriber:
     def fw_model_name(self) -> str:
         """The model id to hand faster-whisper."""
         return _MODEL_ALIASES.get(self.model, self.model)
+
+    @property
+    def initial_prompt(self) -> str:
+        """Decoder-bias prompt built from the personal vocabulary."""
+        return build_initial_prompt(self.vocabulary)
 
     def preload(self) -> bool:
         """
@@ -116,15 +160,18 @@ class WhisperTranscriber:
             self.on_progress(0.0, "Starting transcription...")
 
         text = self._transcribe_faster_whisper(audio_path)
-        if text is not None:
-            return text
 
-        if not self.whisper_path:
-            if self.on_progress:
-                self.on_progress(0.1, "Using Python whisper fallback...")
-            return self._transcribe_fallback(audio_path)
+        if text is None:
+            if not self.whisper_path:
+                if self.on_progress:
+                    self.on_progress(0.1, "Using Python whisper fallback...")
+                text = self._transcribe_fallback(audio_path)
+            else:
+                text = self._transcribe_whisper_cpp(audio_path)
 
-        return self._transcribe_whisper_cpp(audio_path)
+        # Single exit point so corrections are applied exactly once, whichever
+        # backend produced the text.
+        return apply_corrections(text, self.corrections)
 
     def _transcribe_faster_whisper(self, audio_path: str) -> Optional[str]:
         """
@@ -146,6 +193,9 @@ class WhisperTranscriber:
                 # press/release; VAD trims it and stops Whisper hallucinating
                 # filler into the silence.
                 vad_filter=True,
+                # Personal jargon: biases the decoder toward these spellings
+                # instead of phonetic guesses ("sticks halo" -> "strixhalo").
+                initial_prompt=self.initial_prompt or None,
             )
             text = " ".join(s.text for s in segments).strip()
 
@@ -171,6 +221,8 @@ class WhisperTranscriber:
                 "--no-timestamps",
                 "-l", self.language,
             ]
+            if self.initial_prompt:
+                cmd += ["--prompt", self.initial_prompt]
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
@@ -219,7 +271,11 @@ class WhisperTranscriber:
             if self.on_progress:
                 self.on_progress(0.5, "Transcribing with Python whisper...")
 
-            result = model.transcribe(audio_path, language=self.language)
+            result = model.transcribe(
+                audio_path,
+                language=self.language,
+                initial_prompt=self.initial_prompt or None,
+            )
 
             if self.on_progress:
                 self.on_progress(1.0, "Transcription complete")

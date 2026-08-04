@@ -258,7 +258,9 @@ class ClaudeDictate:
         )
         self.transcriber = WhisperTranscriber(
             whisper_path=self.config.get("whisper_cpp_path", ""),
-            model=self.config.get("whisper_model", "base.en")
+            model=self.config.get("whisper_model", "base.en"),
+            vocabulary=self.config.get("vocabulary_terms", []),
+            corrections=self.config.get("vocabulary_corrections", {}),
         )
         llm_backend = self.config.get("default_llm", "f235")
         backend_url_key = {

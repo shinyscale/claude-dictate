@@ -7,14 +7,48 @@ import json
 import os
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Dict, List, Optional
 import shutil
+
+
+# Terms Whisper has no reason to know but that show up constantly in this
+# user's dictation. Fed to the decoder as an initial_prompt, which biases the
+# language model toward these spellings instead of phonetic guesses.
+# Keep it short -- Whisper only conditions on the last 224 prompt tokens.
+DEFAULT_VOCABULARY = [
+    "strixhalo", "sandpipe", "bodypipe", "facepipe", "sandpipe-body",
+    "GVHMR", "SMPL-X", "mocap", "Spark f235", "spark-987a", "powerhouse",
+    "Deck Nine", "ACX", "Scripty", "DeepSeek", "Qwen", "LM Studio",
+    "vLLM", "Tailscale", "Home Assistant", "Claude", "Anthropic",
+    "faster-whisper", "CTranslate2", "Cloudflare Pages",
+]
+
+# Deterministic fix-ups applied after decoding, for words Whisper reliably
+# mangles even with the prompt bias. Keys are matched case-insensitively on
+# word boundaries; values are pasted verbatim.
+DEFAULT_CORRECTIONS = {
+    "sticks halo": "strixhalo",
+    "strix halo": "strixhalo",
+    "sand pipe": "sandpipe",
+    "body pipe": "bodypipe",
+    "face pipe": "facepipe",
+    "deck 9": "Deck Nine",
+    "scripty": "Scripty",
+    "f 235": "f235",
+    "deep seek": "DeepSeek",
+    "lm studio": "LM Studio",
+    "tail scale": "Tailscale",
+}
 
 
 # Default configuration dict (for backwards compatibility)
 DEFAULT_CONFIG = {
     "whisper_cpp_path": "",
     "whisper_model": "large-v3-turbo",
+    # copies: DEFAULT_CONFIG.copy() is shallow, so callers must not be handed
+    # aliases of the module-level defaults
+    "vocabulary_terms": list(DEFAULT_VOCABULARY),
+    "vocabulary_corrections": dict(DEFAULT_CORRECTIONS),
     "sample_rate": 16000,
     "channels": 1,
     "chunk_size": 1024,
@@ -43,6 +77,13 @@ class WhisperConfig:
     executable_path: str = ""
     model: str = "large-v3-turbo"
     language: str = "en"
+
+
+@dataclass
+class VocabularyConfig:
+    """Personal vocabulary: decoder bias plus post-decode corrections."""
+    terms: List[str] = field(default_factory=lambda: list(DEFAULT_VOCABULARY))
+    corrections: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CORRECTIONS))
 
 
 @dataclass
@@ -100,6 +141,7 @@ class SystemConfig:
 class AppConfig:
     """Main application configuration."""
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
+    vocabulary: VocabularyConfig = field(default_factory=VocabularyConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
@@ -150,6 +192,7 @@ class AppConfig:
         """Convert to dictionary."""
         return {
             "whisper": asdict(self.whisper),
+            "vocabulary": asdict(self.vocabulary),
             "audio": asdict(self.audio),
             "llm": asdict(self.llm),
             "hotkey": asdict(self.hotkey),
@@ -163,6 +206,8 @@ class AppConfig:
         return {
             "whisper_cpp_path": self.whisper.executable_path,
             "whisper_model": self.whisper.model,
+            "vocabulary_terms": self.vocabulary.terms,
+            "vocabulary_corrections": self.vocabulary.corrections,
             "sample_rate": self.audio.sample_rate,
             "channels": self.audio.channels,
             "chunk_size": self.audio.chunk_size,
@@ -193,6 +238,7 @@ class AppConfig:
             system_data = data.get("system", {})
             return cls(
                 whisper=WhisperConfig(**data.get("whisper", {})),
+                vocabulary=VocabularyConfig(**data.get("vocabulary", {})),
                 audio=AudioConfig(**data.get("audio", {})),
                 llm=LLMConfig(**data.get("llm", {})),
                 hotkey=HotkeyConfig(**data.get("hotkey", {})),
@@ -206,6 +252,12 @@ class AppConfig:
                 whisper=WhisperConfig(
                     executable_path=data.get("whisper_cpp_path", ""),
                     model=data.get("whisper_model", "base.en"),
+                ),
+                vocabulary=VocabularyConfig(
+                    terms=data.get("vocabulary_terms", list(DEFAULT_VOCABULARY)),
+                    corrections=data.get(
+                        "vocabulary_corrections", dict(DEFAULT_CORRECTIONS)
+                    ),
                 ),
                 audio=AudioConfig(
                     sample_rate=data.get("sample_rate", 16000),
