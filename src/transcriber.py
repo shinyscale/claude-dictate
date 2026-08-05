@@ -11,6 +11,7 @@ The faster-whisper model is cached at module level so a long-lived process
 model that is already resident in VRAM.
 """
 
+import difflib
 import os
 import re
 import subprocess
@@ -70,6 +71,107 @@ def apply_corrections(text: str, corrections: Optional[Dict[str, str]]) -> str:
 _PUNCT_WORDS = re.compile(
     r"\b(exclamation\s+(?:point|mark)|question\s+mark)\b", re.IGNORECASE
 )
+
+# Stock phrases Whisper emits into dead air. They come from caption-heavy
+# training data (YouTube sign-offs, subtitle credits), not from the mic.
+_FILLER_HALLUCINATIONS = {
+    "thank you", "thank you very much", "thanks for watching",
+    "thank you for watching", "please subscribe", "like and subscribe",
+    "see you next time", "bye", "bye bye", "goodbye", "you", "okay", "ok",
+    "hello", "hello everyone", "hello good morning", "good morning",
+    "subtitles by the amara org community", "transcription by castingwords",
+    "subs by www zeoranger co uk", "amara org", "music", "applause",
+    "foreign", "thanks", "thank you so much",
+}
+
+
+def _normalize(text: str) -> str:
+    """Lowercase, strip punctuation -- for filler and duplicate matching."""
+    return re.sub(r"[^\w\s]", "", text).strip().lower()
+
+
+def _similar(a: str, b: str, ratio: float = 0.92) -> bool:
+    """Near-identical normalized text (decoder loops rarely repeat exactly)."""
+    return bool(a) and bool(b) and difflib.SequenceMatcher(None, a, b).ratio() > ratio
+
+
+def filter_segments(
+    segments,
+    gap_cut: float = 3.0,
+    min_logprob: float = -1.0,
+    max_no_speech: float = 0.6,
+    verbose: bool = True,
+):
+    """
+    Drop the text Whisper invents after the speaker stops talking.
+
+    Hold-to-talk clips end with dead air: the user finishes a thought but
+    keeps the key held. Fed that, the decoder produces fluent, confident,
+    entirely fabricated sentences -- often drifting language or reciting
+    caption boilerplate. Three independent guards, since any one of them
+    can miss:
+
+      1. Trailing cut: once a low-confidence segment appears after a long
+         silence gap, everything from there on is post-speech noise.
+      2. Filler phrases: caption boilerplate is dropped when it is
+         isolated or low-confidence (a genuine spoken "thank you" that is
+         confident and continuous with the speech survives).
+      3. Duplicate collapse: the decoder loops on near-silence, repeating
+         the previous sentence verbatim.
+
+    Returns (kept_texts, dropped_notes).
+    """
+    kept, dropped = [], []
+    prev_end = None
+    cut = False
+
+    for seg in segments:
+        text = (seg.text or "").strip()
+        if not text:
+            continue
+
+        logprob = getattr(seg, "avg_logprob", 0.0) or 0.0
+        no_speech = getattr(seg, "no_speech_prob", 0.0) or 0.0
+        start = getattr(seg, "start", 0.0) or 0.0
+        gap = (start - prev_end) if prev_end is not None else 0.0
+        weak = logprob < min_logprob or no_speech > max_no_speech
+        norm = _normalize(text)
+
+        if cut:
+            dropped.append(f"after-cut {text[:40]!r}")
+            continue
+
+        if kept and gap >= gap_cut and weak:
+            cut = True
+            dropped.append(
+                f"trailing (gap {gap:.1f}s, logprob {logprob:.2f}) {text[:40]!r}"
+            )
+            continue
+
+        if norm in _FILLER_HALLUCINATIONS and (weak or gap >= 1.5 or not kept):
+            dropped.append(f"filler {text[:40]!r}")
+            continue
+
+        # Back-to-back repeats are always the decoder looping. A repeat of
+        # something said earlier is only suspect when it is weak or arrives
+        # after a pause -- people do legitimately restate a point mid-flow.
+        if kept and _similar(norm, _normalize(kept[-1])):
+            dropped.append(f"duplicate {text[:40]!r}")
+            continue
+        if (weak or gap >= 1.5) and any(
+            _similar(norm, _normalize(k)) for k in kept[:-1]
+        ):
+            dropped.append(f"echo of earlier line {text[:40]!r}")
+            continue
+
+        kept.append(text)
+        prev_end = getattr(seg, "end", start) or start
+
+    if dropped and verbose:
+        for note in dropped:
+            print(f"[Whisper] dropped {note}")
+
+    return kept, dropped
 
 
 def apply_spoken_punctuation(text: str) -> str:
@@ -250,11 +352,31 @@ class WhisperTranscriber:
                 # press/release; VAD trims it and stops Whisper hallucinating
                 # filler into the silence.
                 vad_filter=True,
+                vad_parameters={
+                    "min_silence_duration_ms": 500,
+                    "speech_pad_ms": 200,
+                },
                 # Personal jargon: biases the decoder toward these spellings
                 # instead of phonetic guesses ("sticks halo" -> "strixhalo").
                 initial_prompt=self.initial_prompt or None,
+                # THE hallucination fix: by default each window is decoded
+                # conditioned on the text of the previous one, so a single
+                # invented phrase in dead air feeds itself and snowballs
+                # into paragraphs of confident nonsense (and can drift
+                # language mid-clip). Every window now stands alone.
+                condition_on_previous_text=False,
+                # Reject windows that are repetitive, low-confidence, or
+                # probably not speech at all.
+                compression_ratio_threshold=2.2,
+                log_prob_threshold=-0.9,
+                no_speech_threshold=0.5,
+                # Lets the decoder skip long silences it suspects it is
+                # hallucinating into (needs word timings).
+                word_timestamps=True,
+                hallucination_silence_threshold=2.0,
             )
-            text = " ".join(s.text for s in segments).strip()
+            kept, _dropped = filter_segments(segments)
+            text = " ".join(kept).strip()
 
             if self.on_progress:
                 self.on_progress(1.0, "Transcription complete")
