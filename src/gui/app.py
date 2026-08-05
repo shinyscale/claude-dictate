@@ -20,6 +20,7 @@ from .overlay import FloatingOverlay
 from ..main import ClaudeDictate, HotkeyListener, SimpleHotkeyListener
 from ..config import DEFAULT_CONFIG, AppConfig
 from ..history import history_path, read_session_entries
+from ..refiner import get_model_status
 
 
 def is_running_in_wsl() -> bool:
@@ -483,16 +484,33 @@ class ClaudeDictateGUI(ctk.CTk):
         )
         self.refine_btn.pack(fill="x", padx=20, pady=(8, 4))
 
-        # Model info display
-        model_backend = self.config.get("default_llm", "ollama")
-        model_name = self.config.get("default_model", "llama3.2")
-        self.model_label = ctk.CTkLabel(
-            parent,
-            text=f"Model: {model_backend}/{model_name}",
-            font=FONTS["small"],
-            text_color=THEME["text_muted"]
+        # Live model status: colored dot for load state, plus resident size
+        # when LM Studio reports one. Polled so JIT loads/evictions show up.
+        status_row = ctk.CTkFrame(parent, fg_color="transparent")
+        status_row.pack(fill="x", padx=20, pady=(2, 4))
+
+        self.model_dot = ctk.CTkLabel(
+            status_row,
+            text="○",
+            font=(FONTS["small"][0], 12),
+            text_color=THEME["text_muted"],
+            width=14
         )
-        self.model_label.pack(anchor="w", padx=20, pady=(2, 4))
+        self.model_dot.pack(side="left")
+
+        self.model_label = ctk.CTkLabel(
+            status_row,
+            text="checking model...",
+            font=FONTS["small"],
+            text_color=THEME["text_muted"],
+            anchor="w",
+            justify="left",
+            wraplength=LEFT_PANEL_WIDTH - 70
+        )
+        self.model_label.pack(side="left", padx=(4, 0))
+        Tooltip(status_row, "Refinement model and whether it is resident in memory")
+
+        self.after(600, self._poll_model_status)
 
         # Spinner container frame - always in layout, content shown/hidden
         self.spinner_container = ctk.CTkFrame(parent, fg_color="transparent", height=30)
@@ -735,6 +753,44 @@ class ClaudeDictateGUI(ctk.CTk):
         self.refined_editor.clear()
         self.status.set_status("Cleared", THEME["text_muted"])
 
+    def _update_model_status_now(self) -> None:
+        """One-shot model status fetch off the UI thread."""
+        def work():
+            backend = self.config.get("default_llm", "lm_studio")
+            model = self.config.get("default_model", "")
+            url_key = {"ollama": "ollama_url", "f235": "f235_url"}.get(
+                backend, "lm_studio_url")
+            status = get_model_status(backend, self.config.get(url_key, ""), model)
+            self.after(0, lambda: self._render_model_status(backend, model, status))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _poll_model_status(self) -> None:
+        """Keep the model load indicator fresh (JIT loads/evictions show up)."""
+        self._update_model_status_now()
+        self.after(10000, self._poll_model_status)
+
+    def _render_model_status(self, backend: str, model: str, status: dict) -> None:
+        try:
+            state = status.get("state")
+            if state == "loaded":
+                dot, color = "●", THEME["success"]
+                size = status.get("size_gb")
+                text = f"{model} — loaded" + (f", {size} GB" if size else "")
+            elif state == "not-loaded":
+                dot, color = "○", THEME["text_muted"]
+                text = f"{model} — loads on first use"
+            elif state == "remote":
+                dot, color = "●", THEME["accent"]
+                text = f"{model} — remote ({backend})"
+            else:
+                dot, color = "○", THEME["warning"]
+                text = f"{model} — backend unreachable"
+            self.model_dot.configure(text=dot, text_color=color)
+            self.model_label.configure(text=text)
+        except Exception:
+            pass  # window torn down mid-poll
+
     def _poll_history(self) -> None:
         """Refresh the session-history panel when the shared file changes."""
         try:
@@ -786,11 +842,11 @@ class ClaudeDictateGUI(ctk.CTk):
         if hasattr(self, 'output_dir_var'):
             self.output_dir_var.set(self.config.get("output_dir", "./outputs"))
 
-        # Update model label
+        # Refresh the model indicator against the new backend/model at once
+        # (the regular 10s poll would eventually catch it anyway)
         if hasattr(self, 'model_label'):
-            model_backend = self.config.get("default_llm", "ollama")
-            model_name = self.config.get("default_model", "llama3.2")
-            self.model_label.configure(text=f"Model: {model_backend}/{model_name}")
+            self.model_label.configure(text="checking model...")
+            self._update_model_status_now()
 
     # Callbacks
     def _on_recording_start(self) -> None:

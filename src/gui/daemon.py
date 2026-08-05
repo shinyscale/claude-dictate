@@ -7,6 +7,7 @@ transcript is pasted directly into whatever window has focus.
 
 import ctypes
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -25,6 +26,20 @@ from .overlay import FloatingOverlay
 from ..main import ClaudeDictate, HotkeyListener
 from ..config import AppConfig
 from ..history import append_entry, mark_session_start
+
+
+# Spoken at the very end of a dictation, this asks for the LLM pass on just
+# this one dictation, regardless of the configured paste mode. Trailing-only
+# and tightly worded so ordinary sentences can't trip it.
+_REFINE_CMD = re.compile(r"\brefine\s+(?:this|that|it)\b[\s.!?]*$", re.IGNORECASE)
+
+
+def _strip_refine_command(text: str) -> tuple:
+    """(refine_requested, text with the spoken command removed)."""
+    m = _REFINE_CMD.search(text)
+    if not m:
+        return False, text
+    return True, text[:m.start()].rstrip()
 
 
 def _foreground_window() -> tuple:
@@ -110,6 +125,36 @@ class DictateDaemon:
         except Exception as e:
             print(f"[Daemon] LLM warmup skipped: {e}")
 
+    # -- audio cues --
+
+    # Short tones so the paste/held/error outcome is knowable without looking
+    # at the overlay (e.g. dictating into a full-screen app). Frequencies form
+    # tiny musical gestures: rising = success, falling = withheld, low = error.
+    _CUES = {
+        "start":  ((880, 60),),
+        "pasted": ((988, 50), (1319, 70)),
+        "held":   ((659, 70), (494, 90)),
+        "empty":  ((440, 80),),
+        "error":  ((311, 200),),
+    }
+
+    def _cue(self, kind: str) -> None:
+        if os.name != "nt" or not self.config.get("audio_cues", False):
+            return
+        tones = self._CUES.get(kind)
+        if not tones:
+            return
+
+        def play() -> None:
+            try:
+                import winsound
+                for freq, ms in tones:
+                    winsound.Beep(freq, ms)
+            except Exception:
+                pass
+
+        threading.Thread(target=play, daemon=True).start()
+
     # -- hotkey --
 
     def _bind_hotkey(self) -> None:
@@ -124,6 +169,7 @@ class DictateDaemon:
 
     def _start_recording(self) -> None:
         self.app.start_recording()
+        self._cue("start")
         if self.system_tray and self.system_tray.is_running:
             self.system_tray.update_icon(recording=True)
         self.root.after(0, self.overlay.show_recording)
@@ -152,12 +198,22 @@ class DictateDaemon:
             transcript = self.app.stop_recording()
             t_transcribe = time.time() - t0
             if not transcript:
+                self._cue("empty")
+                self.root.after(0, self.overlay.show_empty)
+                return
+
+            # Saying "refine this" at the end of a dictation requests the LLM
+            # pass for just this one, whatever the configured mode.
+            refine_requested, transcript = _strip_refine_command(transcript)
+            if refine_requested and not transcript:
+                # The whole dictation was the command itself.
+                self._cue("empty")
                 self.root.after(0, self.overlay.show_empty)
                 return
 
             t_refine = 0.0
             final_text = transcript
-            if self.config.get("paste_mode", "raw") == "refined":
+            if refine_requested or self.config.get("paste_mode", "raw") == "refined":
                 self.root.after(0, self.overlay.show_refining)
                 t0 = time.time()
                 refined = self.app.refine_text(transcript, style="clean")
@@ -181,6 +237,7 @@ class DictateDaemon:
                       f"paste withheld, text on clipboard")
                 append_entry("held (focus moved)",
                              f"{target_title or '?'} -> {now_title or '?'}")
+                self._cue("held")
                 self.root.after(0, lambda: self.overlay.show_held(final_text))
                 return
 
@@ -188,9 +245,11 @@ class DictateDaemon:
             append_entry("pasted into", now_title or "(unknown window)")
             self._paste()
 
+            self._cue("pasted")
             self.root.after(0, lambda: self.overlay.show_pasted(final_text))
         except Exception as e:
             print(f"[Daemon] Dictation failed: {e}")
+            self._cue("error")
             self.root.after(0, lambda: self.overlay.show_error(str(e)))
 
     def _paste(self) -> None:

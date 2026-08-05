@@ -3,10 +3,70 @@ LLM refinement module for Claude Dictate
 Handles text refinement using local LLMs (Ollama or LM Studio).
 """
 
+import json
+import subprocess
+from pathlib import Path
 from typing import Optional, Callable, Generator
+
 import requests
 
 from .prompts import get_prompt, get_available_styles, SYSTEM_PROMPT
+
+
+def _lms_loaded_size_gb(model: str) -> Optional[float]:
+    """Resident size of a loaded LM Studio model via `lms ps`, if the CLI
+    is installed. The REST API reports load state but not memory."""
+    lms = Path.home() / ".lmstudio" / "bin" / "lms.exe"
+    if not lms.exists():
+        return None
+    try:
+        out = subprocess.run(
+            [str(lms), "ps", "--json"],
+            capture_output=True, text=True, timeout=6,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+        for m in json.loads(out.stdout or "[]"):
+            if model in (m.get("identifier"), m.get("modelKey"), m.get("path")):
+                size = m.get("sizeBytes")
+                return round(size / 1e9, 1) if size else None
+    except Exception:
+        pass
+    return None
+
+
+def get_model_status(backend: str, base_url: str, model: str) -> dict:
+    """
+    Best-effort load state for the configured refinement model.
+
+    Returns {"state": "loaded"|"not-loaded"|"remote"|"unknown",
+             "size_gb": float|None}.
+    "remote" means a non-local backend we can't introspect (e.g. f235).
+    """
+    try:
+        if backend == "ollama":
+            r = requests.get(f"{base_url}/api/ps", timeout=3)
+            if r.status_code == 200:
+                for m in r.json().get("models", []):
+                    if model in (m.get("name"), m.get("model")):
+                        size = m.get("size_vram") or m.get("size") or 0
+                        return {"state": "loaded",
+                                "size_gb": round(size / 1e9, 1) if size else None}
+                return {"state": "not-loaded", "size_gb": None}
+        else:
+            root = base_url.rsplit("/v1", 1)[0]
+            if "localhost" not in root and "127.0.0.1" not in root:
+                return {"state": "remote", "size_gb": None}
+            r = requests.get(f"{root}/api/v0/models", timeout=3)
+            if r.status_code == 200:
+                for m in r.json().get("data", []):
+                    if m.get("id") == model:
+                        if m.get("state") == "loaded":
+                            return {"state": "loaded",
+                                    "size_gb": _lms_loaded_size_gb(model)}
+                        return {"state": "not-loaded", "size_gb": None}
+    except Exception:
+        pass
+    return {"state": "unknown", "size_gb": None}
 
 
 class LLMRefiner:

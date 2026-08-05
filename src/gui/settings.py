@@ -259,7 +259,7 @@ class SettingsPanel(ctk.CTkToplevel):
 
         self.config = config.copy()
         self.on_save = on_save
-        self.ollama_models: List[str] = []
+        self.available_models: List[str] = []
         self.audio_devices: List[dict] = []
 
         self.title("Settings")
@@ -278,36 +278,55 @@ class SettingsPanel(ctk.CTkToplevel):
 
         self._create_widgets()
 
-        # Fetch Ollama models on open
-        self._fetch_ollama_models()
+        # Fetch models for the active backend on open
+        self._fetch_models()
 
-    def _fetch_ollama_models(self) -> None:
-        """Fetch available models from Ollama API."""
+    def _backend_endpoint(self) -> tuple:
+        """(backend, models-list URL) for whichever backend is selected."""
+        backend = self.llm_backend_var.get() if hasattr(self, "llm_backend_var") \
+            else self.config.get("default_llm", "lm_studio")
+        if backend == "ollama":
+            url = self.ollama_url_var.get() or "http://localhost:11434"
+            return backend, f"{url}/api/tags"
+        if backend == "f235":
+            url = self.config.get("f235_url", "http://spark-f235:8000/v1")
+            return backend, f"{url}/models"
+        url = self.lm_studio_url_var.get() if hasattr(self, "lm_studio_url_var") \
+            else self.config.get("lm_studio_url", "http://localhost:1234/v1")
+        return "lm_studio", f"{url}/models"
+
+    def _fetch_models(self) -> None:
+        """Fetch available models from the ACTIVE backend (not always Ollama,
+        which used to leave the dropdown showing stale names whenever the
+        real backend was LM Studio or f235)."""
         def fetch():
+            backend, endpoint = self._backend_endpoint()
             try:
-                url = self.ollama_url_var.get() or "http://localhost:11434"
-                print(f"[Settings] Connecting to Ollama at {url}...")
-                response = requests.get(f"{url}/api/tags", timeout=5)
+                print(f"[Settings] Fetching {backend} models from {endpoint}...")
+                response = requests.get(endpoint, timeout=5)
                 if response.status_code == 200:
                     data = response.json()
-                    models = [m["name"] for m in data.get("models", [])]
-                    self.ollama_models = sorted(models)
+                    if backend == "ollama":
+                        models = [m["name"] for m in data.get("models", [])]
+                    else:  # OpenAI-compatible: LM Studio / f235
+                        models = [m["id"] for m in data.get("data", [])]
+                    self.available_models = sorted(models)
                     print(f"[Settings] Found {len(models)} models: {', '.join(models[:5])}{'...' if len(models) > 5 else ''}")
                     # Update dropdown on main thread
                     self.after(0, self._update_model_dropdown)
                     self.after(0, lambda: self.connection_status.configure(
-                        text=f"✓ Connected ({len(models)} models)",
+                        text=f"✓ {backend} connected ({len(models)} models)",
                         text_color=THEME["success"]
                     ))
                 else:
-                    print(f"[Settings] Ollama connection failed: HTTP {response.status_code}")
+                    print(f"[Settings] {backend} connection failed: HTTP {response.status_code}")
                     self.after(0, self._enable_manual_model_input)
                     self.after(0, lambda: self.connection_status.configure(
-                        text="✗ Connection failed - type model name manually",
+                        text=f"✗ {backend} connection failed - type model name manually",
                         text_color=THEME["error"]
                     ))
             except Exception as e:
-                print(f"[Settings] Ollama error: {e}")
+                print(f"[Settings] {backend} error: {e}")
                 self.after(0, self._enable_manual_model_input)
                 self.after(0, lambda: self.connection_status.configure(
                     text=f"✗ {str(e)[:25]} - type manually",
@@ -326,17 +345,17 @@ class SettingsPanel(ctk.CTkToplevel):
 
     def _update_model_dropdown(self) -> None:
         """Update the model dropdown with fetched models."""
-        if self.ollama_models:
+        if self.available_models:
             self.llm_model_dropdown.configure(
-                values=self.ollama_models,
+                values=self.available_models,
                 state="normal"  # Enable dropdown after loading
             )
             # Restore saved model if it exists in the list
-            if self._saved_model and self._saved_model in self.ollama_models:
+            if self._saved_model and self._saved_model in self.available_models:
                 self.llm_model_var.set(self._saved_model)
-            elif self.ollama_models:
+            else:
                 # Otherwise select first available model
-                self.llm_model_var.set(self.ollama_models[0])
+                self.llm_model_var.set(self.available_models[0])
 
     def _create_widgets(self) -> None:
         """Create settings widgets."""
@@ -424,7 +443,7 @@ class SettingsPanel(ctk.CTkToplevel):
             height=36,
             fg_color=THEME["action_green"],
             hover_color=THEME["action_green_hover"],
-            command=self._fetch_ollama_models
+            command=self._fetch_models
         ).pack(side="right")
 
         # Connection status
@@ -511,6 +530,11 @@ class SettingsPanel(ctk.CTkToplevel):
             "Active Backend:",
             self.llm_backend_var,
             ["ollama", "lm_studio", "f235"]
+        )
+        # Repopulate the model list whenever the backend changes, so the
+        # dropdown always shows models the chosen backend can actually serve.
+        self.llm_backend_var.trace_add(
+            "write", lambda *_: self._fetch_models()
         )
 
         # === Whisper Settings ===
@@ -812,7 +836,10 @@ class SettingsPanel(ctk.CTkToplevel):
         self.config["whisper_cpp_path"] = self.whisper_path_var.get()
         self.config["whisper_model"] = self.whisper_model_var.get()
         self.config["default_llm"] = self.llm_backend_var.get()
-        self.config["default_model"] = self.llm_model_var.get()
+        # Never persist the placeholder if the model list hadn't loaded yet.
+        model_choice = self.llm_model_var.get()
+        if model_choice and model_choice != "Loading models...":
+            self.config["default_model"] = model_choice
         self.config["ollama_url"] = self.ollama_url_var.get()
         self.config["lm_studio_url"] = self.lm_studio_url_var.get()
         self.config["hotkey"] = self.hotkey_var.get()

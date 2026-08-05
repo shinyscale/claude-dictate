@@ -65,6 +65,7 @@ DEFAULT_CONFIG = {
     "paste_mode": "raw",
     "verify_window": True,
     "minimize_to_tray": False,
+    "audio_cues": False,
     # Window geometry (None means use defaults)
     "window_width": None,
     "window_height": None,
@@ -144,6 +145,10 @@ class WindowConfig:
 class SystemConfig:
     """System behavior configuration."""
     minimize_to_tray: bool = False
+    # Short tones from the tray daemon (recording started, pasted, held,
+    # error). Off by default -- Zach found the beeps intrusive; the code
+    # stays for anyone who wants outcome sounds in full-screen apps.
+    audio_cues: bool = False
 
 
 @dataclass
@@ -236,6 +241,7 @@ class AppConfig:
             "paste_mode": self.output.paste_mode,
             "verify_window": self.output.verify_window,
             "minimize_to_tray": self.system.minimize_to_tray,
+            "audio_cues": self.system.audio_cues,
             "window_width": self.window.width,
             "window_height": self.window.height,
             "window_x": self.window.x,
@@ -304,6 +310,7 @@ class AppConfig:
                 ),
                 system=SystemConfig(
                     minimize_to_tray=data.get("minimize_to_tray", False),
+                    audio_cues=data.get("audio_cues", False),
                 ),
             )
 
