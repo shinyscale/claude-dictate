@@ -123,8 +123,10 @@ def resolve_fonts() -> dict:
 
 
 # Window dimensions
-WINDOW_WIDTH = 960
-WINDOW_HEIGHT = 700
-WINDOW_MIN_WIDTH = 800
+# Sized so the editors keep a workable width even with the controls column
+# (LEFT_PANEL_WIDTH) and the 300px session-history sidebar both visible.
+WINDOW_WIDTH = 1320
+WINDOW_HEIGHT = 760
+WINDOW_MIN_WIDTH = 1000
 WINDOW_MIN_HEIGHT = 600
 LEFT_PANEL_WIDTH = 320

@@ -26,6 +26,8 @@ from .overlay import FloatingOverlay
 from ..main import ClaudeDictate, HotkeyListener
 from ..config import AppConfig
 from ..history import append_entry, mark_session_start
+from ..lockfile import write_daemon_lock, clear_daemon_lock
+from ..refiner import get_model_status
 
 
 # Spoken at the very end of a dictation, this asks for the LLM pass on just
@@ -35,11 +37,17 @@ _REFINE_CMD = re.compile(r"\brefine\s+(?:this|that|it)\b[\s.!?]*$", re.IGNORECAS
 
 
 def _strip_refine_command(text: str) -> tuple:
-    """(refine_requested, text with the spoken command removed)."""
-    m = _REFINE_CMD.search(text)
-    if not m:
-        return False, text
-    return True, text[:m.start()].rstrip()
+    """(refine_requested, text with the spoken command removed).
+
+    Loops because the command can appear repeated at the tail ("Refine
+    this. Refine this.") when the user says it more than once."""
+    requested = False
+    while True:
+        m = _REFINE_CMD.search(text)
+        if not m:
+            return requested, text
+        requested = True
+        text = text[:m.start()].rstrip()
 
 
 def _foreground_window() -> tuple:
@@ -70,6 +78,9 @@ class DictateDaemon:
         # A marker per daemon launch is what defines "this session" for the
         # GUI's history panel.
         mark_session_start()
+        # PID lock tells a concurrently-open GUI editor not to bind the
+        # record hotkey too (double-binding recorded every dictation twice).
+        write_daemon_lock()
 
         # Both models pay their load cost at startup, off the main thread, so
         # the first hotkey press doesn't stall behind a whisper VRAM load or
@@ -106,24 +117,54 @@ class DictateDaemon:
         r = self.app.refiner
         try:
             t0 = time.time()
-            if r.backend == "ollama":
-                requests.post(
-                    f"{r.base_url}/api/generate",
-                    json={"model": r.model, "prompt": "hi",
-                          "options": {"num_predict": 1}},
-                    timeout=180,
-                )
+            status = get_model_status(r.backend, r.base_url, r.model)
+            if status["state"] == "loaded":
+                print(f"[Daemon] LLM '{r.model}' already resident")
+            elif status["state"] == "not-loaded" and self._lms_pin_model(r.model):
+                print(f"[Daemon] LLM '{r.model}' pinned resident "
+                      f"({time.time() - t0:.1f}s)")
             else:
-                requests.post(
-                    f"{r.base_url}/chat/completions",
-                    json={"model": r.model,
-                          "messages": [{"role": "user", "content": "hi"}],
-                          "max_tokens": 1},
-                    timeout=180,
-                )
-            print(f"[Daemon] LLM '{r.model}' warm ({time.time() - t0:.1f}s)")
+                # Fallback: a 1-token request JIT-loads the model. Less good
+                # than pinning (JIT loads auto-evict on an idle TTL), but it
+                # works for Ollama and remote backends.
+                if r.backend == "ollama":
+                    requests.post(
+                        f"{r.base_url}/api/generate",
+                        json={"model": r.model, "prompt": "hi",
+                              "options": {"num_predict": 1}},
+                        timeout=300,
+                    )
+                else:
+                    requests.post(
+                        f"{r.base_url}/chat/completions",
+                        json={"model": r.model,
+                              "messages": [{"role": "user", "content": "hi"}],
+                              "max_tokens": 1},
+                        timeout=300,
+                    )
+                print(f"[Daemon] LLM '{r.model}' warm ({time.time() - t0:.1f}s)")
         except Exception as e:
             print(f"[Daemon] LLM warmup skipped: {e}")
+
+    def _lms_pin_model(self, model: str) -> bool:
+        """Explicitly load the model via the lms CLI. Unlike a JIT load this
+        has no idle TTL, so the model can't be evicted between dictations --
+        JIT re-loads have failed mid-dictation ('Operation canceled') where
+        explicit loads succeed."""
+        lms = Path.home() / ".lmstudio" / "bin" / (
+            "lms.exe" if os.name == "nt" else "lms")
+        if not lms.exists():
+            return False
+        try:
+            res = subprocess.run(
+                [str(lms), "load", model, "-c", "8192", "--gpu", "max", "-y"],
+                capture_output=True, text=True, timeout=300,
+                creationflags=0x08000000 if os.name == "nt" else 0,
+            )
+            return res.returncode == 0
+        except Exception as e:
+            print(f"[Daemon] lms load failed: {e}")
+            return False
 
     # -- audio cues --
 
@@ -217,10 +258,18 @@ class DictateDaemon:
                 self.root.after(0, self.overlay.show_refining)
                 t0 = time.time()
                 refined = self.app.refine_text(transcript, style="clean")
+                if not refined:
+                    # One retry: LM Studio JIT loads occasionally fail with a
+                    # transient error and succeed immediately after.
+                    print("[Daemon] Refine returned nothing; retrying once...")
+                    refined = self.app.refine_text(transcript, style="clean")
                 t_refine = time.time() - t0
                 # Refine is best-effort: if the backend is unreachable, still
                 # paste the raw transcript rather than losing the dictation.
                 final_text = refined or transcript
+                if not refined:
+                    append_entry("refine failed",
+                                 "LLM returned no output; raw transcript pasted")
 
             print(f"[Daemon] Timing: transcribe {t_transcribe:.1f}s, "
                   f"refine {t_refine:.1f}s")
@@ -292,6 +341,7 @@ class DictateDaemon:
         subprocess.Popen([sys.executable, str(run_py), "--gui"], cwd=str(run_py.parent))
 
     def _exit(self) -> None:
+        clear_daemon_lock()
         if self.hotkey_listener:
             self.hotkey_listener.stop()
         if self.system_tray:

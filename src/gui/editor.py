@@ -3,6 +3,8 @@ Text editor widget for Claude Dictate GUI
 Displays and allows editing of transcribed/refined text.
 """
 
+from typing import Callable, Optional
+
 import customtkinter as ctk
 import pyperclip
 
@@ -11,15 +13,26 @@ from .widgets import Tooltip
 
 
 class TextEditor(ctk.CTkFrame):
-    """Text editor panel with header and hover copy button."""
+    """Text editor panel with header and always-visible action buttons.
 
-    def __init__(self, master, title: str, **kwargs):
+    Buttons used to be hover-revealed, but at narrow widths (the session
+    history sidebar squeezes the editors) they clipped out of the header
+    and were effectively undiscoverable. Small and always-visible wins.
+    """
+
+    def __init__(self, master, title: str,
+                 on_clear: Optional[Callable] = None,
+                 clear_tooltip: str = "Clear",
+                 **kwargs):
         """
         Initialize text editor.
 
         Args:
             master: Parent widget
             title: Editor panel title
+            on_clear: When given, show a trash button that invokes this.
+                Only one editor should carry it (it clears both panels).
+            clear_tooltip: Tooltip for the trash button
             **kwargs: Additional frame arguments
         """
         super().__init__(
@@ -41,8 +54,25 @@ class TextEditor(ctk.CTkFrame):
         )
         self.title_label.pack(side="left")
 
-        # Hover-revealed action buttons: copy and clear live with the text
-        # they act on, so their meaning needs no guessing.
+        # Rightmost first: pack(side="right") stacks right-to-left.
+        if on_clear is not None:
+            self.clear_btn = ctk.CTkButton(
+                header,
+                text="🗑",
+                font=("", 14),
+                width=32,
+                height=28,
+                fg_color="transparent",
+                hover_color=THEME["bg_medium"],
+                text_color=THEME["text_muted"],
+                corner_radius=6,
+                command=on_clear
+            )
+            self.clear_btn.pack(side="right")
+            Tooltip(self.clear_btn, clear_tooltip)
+        else:
+            self.clear_btn = None
+
         self.copy_btn = ctk.CTkButton(
             header,
             text="📋",
@@ -55,33 +85,17 @@ class TextEditor(ctk.CTkFrame):
             corner_radius=6,
             command=self._copy_to_clipboard
         )
+        self.copy_btn.pack(side="right", padx=(0, 2))
         Tooltip(self.copy_btn, f"Copy the {title.lower()}")
 
-        self.clear_btn = ctk.CTkButton(
-            header,
-            text="🗑",
-            font=("", 14),
-            width=32,
-            height=28,
-            fg_color="transparent",
-            hover_color=THEME["bg_medium"],
-            text_color=THEME["text_muted"],
-            corner_radius=6,
-            command=self._clear_clicked
-        )
-        Tooltip(self.clear_btn, f"Clear the {title.lower()}")
-
-        # Initially hidden - pack_forget() isn't needed since we haven't packed it yet
-        self._copy_btn_visible = False
-
-        # Word count label
+        # Word count label (compact: fits headers squeezed by the sidebar)
         self.word_count_label = ctk.CTkLabel(
             header,
             text="",
             font=FONTS["small"],
             text_color=THEME["text_muted"]
         )
-        self.word_count_label.pack(side="right")
+        self.word_count_label.pack(side="right", padx=(0, 8))
 
         # Text area
         self.textbox = ctk.CTkTextbox(
@@ -99,41 +113,6 @@ class TextEditor(ctk.CTkFrame):
         # Bind text change for word count
         self.textbox.bind("<KeyRelease>", self._update_word_count)
 
-        # Bind hover events for copy button visibility
-        self.bind("<Enter>", self._on_mouse_enter)
-        self.bind("<Leave>", self._on_mouse_leave)
-        self.textbox.bind("<Enter>", self._on_mouse_enter)
-        self.textbox.bind("<Leave>", self._on_mouse_leave)
-        header.bind("<Enter>", self._on_mouse_enter)
-        header.bind("<Leave>", self._on_mouse_leave)
-
-    def _on_mouse_enter(self, event=None) -> None:
-        """Show action buttons when mouse enters the editor."""
-        if not self._copy_btn_visible and self.get_text().strip():
-            self.copy_btn.pack(side="right", padx=(0, 8))
-            self.clear_btn.pack(side="right", padx=(0, 2))
-            self._copy_btn_visible = True
-
-    def _on_mouse_leave(self, event=None) -> None:
-        """Hide copy button when mouse leaves the editor."""
-        # Check if mouse is still within the widget bounds
-        try:
-            x, y = self.winfo_pointerxy()
-            widget_x = self.winfo_rootx()
-            widget_y = self.winfo_rooty()
-            widget_w = self.winfo_width()
-            widget_h = self.winfo_height()
-
-            # Only hide if mouse is actually outside the widget
-            if not (widget_x <= x <= widget_x + widget_w and
-                    widget_y <= y <= widget_y + widget_h):
-                if self._copy_btn_visible:
-                    self.copy_btn.pack_forget()
-                    self.clear_btn.pack_forget()
-                    self._copy_btn_visible = False
-        except Exception:
-            pass
-
     def _copy_to_clipboard(self) -> None:
         """Copy text content to clipboard."""
         text = self.get_text()
@@ -146,11 +125,10 @@ class TextEditor(ctk.CTkFrame):
                 text="📋", text_color=original_color
             ))
 
-    def _clear_clicked(self) -> None:
-        """Clear this panel with a brief confirmation flash."""
-        if not self.get_text().strip():
+    def flash_cleared(self) -> None:
+        """Confirmation flash on the trash button, if this editor has one."""
+        if self.clear_btn is None:
             return
-        self.clear()
         self.clear_btn.configure(text="✓", text_color=THEME["success"])
         self.after(800, lambda: self.clear_btn.configure(
             text="🗑", text_color=THEME["text_muted"]
@@ -208,7 +186,7 @@ class TextEditor(ctk.CTkFrame):
         text = self.get_text()
         words = len(text.split()) if text.strip() else 0
         chars = len(text)
-        self.word_count_label.configure(text=f"{words} words, {chars} chars")
+        self.word_count_label.configure(text=f"{words}w · {chars}c" if chars else "")
 
     def set_readonly(self, readonly: bool = True) -> None:
         """

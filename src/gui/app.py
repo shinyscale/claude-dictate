@@ -21,6 +21,7 @@ from ..main import ClaudeDictate, HotkeyListener, SimpleHotkeyListener
 from ..config import DEFAULT_CONFIG, AppConfig
 from ..history import history_path, read_session_entries
 from ..refiner import get_model_status
+from ..lockfile import daemon_running
 
 
 def is_running_in_wsl() -> bool:
@@ -522,8 +523,13 @@ class ClaudeDictateGUI(ctk.CTk):
 
     def _create_editor_panel(self, parent) -> None:
         """Create text editor panels."""
-        # Top editor - Raw transcription
-        self.raw_editor = TextEditor(parent, "Raw Transcription")
+        # Top editor - Raw transcription. Carries the single trash button,
+        # which clears BOTH panels (one wastebasket for the whole text area).
+        self.raw_editor = TextEditor(
+            parent, "Raw Transcription",
+            on_clear=self._clear_editors,
+            clear_tooltip="Clear both panels"
+        )
         self.raw_editor.pack(fill="both", expand=True, pady=(0, 8))
 
         # Bottom editor - Refined text
@@ -538,18 +544,24 @@ class ClaudeDictateGUI(ctk.CTk):
         if self.clear_hotkey_listener:
             self.clear_hotkey_listener.stop()
 
-        # Record hotkey (hold-to-talk)
-        try:
-            hotkey = self.config.get("hotkey", "ctrl+shift")
-            self.hotkey_listener = HotkeyListener(
-                hotkey_combo=hotkey,
-                on_activate=lambda: self.after(0, self._start_recording),
-                on_deactivate=lambda: self.after(0, self._stop_recording)
-            )
-            self.hotkey_listener.start()
-            print(f"[GUI] Record hotkey bound: {hotkey}")
-        except Exception as e:
-            print(f"Could not bind record hotkey: {e}")
+        # Record hotkey (hold-to-talk). If the tray daemon is running it
+        # already owns this hotkey -- binding here too would record every
+        # dictation twice, in two processes, with subtly different text.
+        if daemon_running():
+            print("[GUI] Tray daemon owns the record hotkey; "
+                  "editor uses the record button only")
+        else:
+            try:
+                hotkey = self.config.get("hotkey", "ctrl+shift")
+                self.hotkey_listener = HotkeyListener(
+                    hotkey_combo=hotkey,
+                    on_activate=lambda: self.after(0, self._start_recording),
+                    on_deactivate=lambda: self.after(0, self._stop_recording)
+                )
+                self.hotkey_listener.start()
+                print(f"[GUI] Record hotkey bound: {hotkey}")
+            except Exception as e:
+                print(f"Could not bind record hotkey: {e}")
 
         # Clear hotkey (press-once to clear transcript)
         try:
@@ -751,6 +763,7 @@ class ClaudeDictateGUI(ctk.CTk):
         """Clear both text editors."""
         self.raw_editor.clear()
         self.refined_editor.clear()
+        self.raw_editor.flash_cleared()
         self.status.set_status("Cleared", THEME["text_muted"])
 
     def _update_model_status_now(self) -> None:
