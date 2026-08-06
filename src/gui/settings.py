@@ -285,6 +285,8 @@ class SettingsPanel(ctk.CTkToplevel):
         """(backend, models-list URL) for whichever backend is selected."""
         backend = self.llm_backend_var.get() if hasattr(self, "llm_backend_var") \
             else self.config.get("default_llm", "lm_studio")
+        if backend == "auto":
+            return backend, ""
         if backend == "ollama":
             url = self.ollama_url_var.get() or "http://localhost:11434"
             return backend, f"{url}/api/tags"
@@ -301,6 +303,16 @@ class SettingsPanel(ctk.CTkToplevel):
         real backend was LM Studio or f235)."""
         def fetch():
             backend, endpoint = self._backend_endpoint()
+            if backend == "auto":
+                # Auto rides whatever model is loaded on whichever engine is
+                # up -- there is no list to fetch and nothing to pin.
+                self.available_models = []
+                self.after(0, self._update_model_dropdown)
+                self.after(0, lambda: self.connection_status.configure(
+                    text="auto — uses whatever model is currently loaded",
+                    text_color=THEME["success"]
+                ))
+                return
             try:
                 print(f"[Settings] Fetching {backend} models from {endpoint}...")
                 response = requests.get(endpoint, timeout=5)
@@ -345,17 +357,18 @@ class SettingsPanel(ctk.CTkToplevel):
 
     def _update_model_dropdown(self) -> None:
         """Update the model dropdown with fetched models."""
-        if self.available_models:
-            self.llm_model_dropdown.configure(
-                values=self.available_models,
-                state="normal"  # Enable dropdown after loading
-            )
-            # Restore saved model if it exists in the list
-            if self._saved_model and self._saved_model in self.available_models:
-                self.llm_model_var.set(self._saved_model)
-            else:
-                # Otherwise select first available model
-                self.llm_model_var.set(self.available_models[0])
+        # "auto" is always offered: use whatever model is already loaded.
+        values = ["auto"] + self.available_models
+        self.llm_model_dropdown.configure(
+            values=values,
+            state="normal"  # Enable dropdown after loading
+        )
+        # Restore saved model if it exists in the list
+        if self._saved_model and self._saved_model in values:
+            self.llm_model_var.set(self._saved_model)
+        else:
+            # Otherwise select first available model
+            self.llm_model_var.set(values[1] if len(values) > 1 else "auto")
 
     def _create_widgets(self) -> None:
         """Create settings widgets."""
@@ -529,7 +542,7 @@ class SettingsPanel(ctk.CTkToplevel):
             content,
             "Active Backend:",
             self.llm_backend_var,
-            ["ollama", "lm_studio", "f235"]
+            ["auto", "ollama", "lm_studio", "f235"]
         )
         # Repopulate the model list whenever the backend changes, so the
         # dropdown always shows models the chosen backend can actually serve.

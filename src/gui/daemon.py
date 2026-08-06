@@ -18,6 +18,7 @@ from typing import Optional
 import requests
 
 import customtkinter as ctk
+from pynput import mouse
 from pynput.keyboard import Controller, Key
 
 from .theme import resolve_fonts
@@ -27,7 +28,7 @@ from ..main import ClaudeDictate, HotkeyListener
 from ..config import AppConfig
 from ..history import append_entry, mark_session_start
 from ..lockfile import write_daemon_lock, clear_daemon_lock
-from ..refiner import get_model_status
+from ..refiner import get_model_status, resolve_llm
 
 
 # Spoken at the very end of a dictation, this asks for the LLM pass on just
@@ -48,6 +49,72 @@ def _strip_refine_command(text: str) -> tuple:
             return requested, text
         requested = True
         text = text[:m.start()].rstrip()
+
+
+# Sentence-terminal punctuation, and the quote/bracket characters that may
+# legitimately trail it ("...done.").
+_SENT_END = ".!?…"
+_WRAPPERS = "\"'”’)]}»"
+
+# Words no English sentence ends on. Whisper transcribes each dictation in
+# isolation and routinely appends a period to an unfinished sentence; a
+# trailing "...and the." is a fake sentence break, not a real one.
+_FUNCTION_WORDS = frozenset("""
+    a an the and or but nor so yet to of in on at by for with from into onto
+    over under about above below after before between during through against
+    without within around because although though while if when whenever
+    unless until since that which who whom whose where why how than as is are
+    was were be been being am do does did have has had having will would
+    shall should can could may might must not very really quite just also
+    then even still only both either neither each every some any no my your
+    his her its our their this these those it's don't doesn't isn't aren't
+    won't wouldn't couldn't shouldn't
+""".split())
+
+_I_PRONOUN = re.compile(r"^[Ii](?:$|['’])")
+
+
+def _join_continuation(prev: str, new: str, vocab) -> tuple:
+    """How to append `new` after previously-pasted `prev` in the same field.
+
+    Returns (backspaces, text): press Backspace `backspaces` times, then
+    paste `text`. Repairs the seam Whisper can't see: exactly one space
+    between chunks; if `prev` broke off mid-sentence, erase the fake
+    trailing period (dangling function word) and de-capitalize `new`'s
+    first word — unless it's "I", an acronym, or a vocabulary proper noun.
+    """
+    prev_r = prev.rstrip()
+    if not prev_r or not new:
+        return 0, new
+
+    core = prev_r.rstrip(_WRAPPERS)
+    backspaces = 0
+    if core and core[-1] not in _SENT_END:
+        mid_thought = True  # ends on a bare word, comma, colon, dash...
+    else:
+        m = re.search(r"([A-Za-z'’]+)([.!?…]+)$", core)
+        mid_thought = bool(
+            m and m.group(1).lower().rstrip("'’") in _FUNCTION_WORDS)
+        if mid_thought and core == prev_r:
+            # No quotes in the way: erase the fake period (plus any
+            # trailing whitespace) so the sentence reads straight through.
+            backspaces = (len(prev) - len(prev_r)) + len(m.group(2))
+
+    if mid_thought:
+        first_word = re.match(r"[A-Za-z'’\-]+", new)
+        w = first_word.group(0) if first_word else new[0]
+        keep_capital = (
+            _I_PRONOUN.match(w) is not None
+            or (len(w) > 1 and any(c.isupper() for c in w[1:]))  # DeepSeek, ACX
+            or any(v and v.split()[0].lower() == w.lower()
+                   and v.split()[0][:1].isupper() for v in vocab)
+        )
+        if new[0].isupper() and not keep_capital:
+            new = new[0].lower() + new[1:]
+    elif new[0].islower():
+        new = new[0].upper() + new[1:]
+
+    return backspaces, " " + new
 
 
 def _foreground_window() -> tuple:
@@ -89,6 +156,14 @@ class DictateDaemon:
 
         self.keyboard = Controller()
 
+        # Continuation tracking: what we last pasted and into which window.
+        # Any real keystroke or mouse click clears it -- after either, the
+        # caret may have moved and a seam repair would corrupt text.
+        self._last_paste: Optional[dict] = None
+        self._injecting = False  # our own synthetic keystrokes don't count
+        self._mouse_listener = mouse.Listener(on_click=self._on_click)
+        self._mouse_listener.start()
+
         # Hidden root hosts the Tk mainloop and the overlay Toplevel; it is
         # never shown. CTk only supports one root per process, so the full
         # editor/settings window is launched as a separate process instead
@@ -117,6 +192,17 @@ class DictateDaemon:
         r = self.app.refiner
         try:
             t0 = time.time()
+            if r.backend == "auto" or r.model == "auto":
+                # Auto mode rides whatever is already resident, so warming
+                # must not load (or evict) anything -- just report.
+                resolved = resolve_llm(r.backend, r.model, r.urls)
+                if resolved:
+                    b, _, m = resolved
+                    print(f"[Daemon] LLM auto mode: '{m}' already loaded ({b})")
+                else:
+                    print("[Daemon] LLM auto mode: nothing loaded yet; refine "
+                          "will use whatever model is resident at dictation time")
+                return
             status = get_model_status(r.backend, r.base_url, r.model)
             if status["state"] == "loaded":
                 print(f"[Daemon] LLM '{r.model}' already resident")
@@ -204,9 +290,18 @@ class DictateDaemon:
             hotkey_combo=hotkey,
             on_activate=self._start_recording,
             on_deactivate=self._stop_recording,
+            on_other_key=self._invalidate_continuation,
         )
         self.hotkey_listener.start()
         print(f"[Daemon] Hold-to-talk hotkey bound: {hotkey}")
+
+    def _invalidate_continuation(self) -> None:
+        if not self._injecting:
+            self._last_paste = None
+
+    def _on_click(self, x, y, button, pressed) -> None:
+        if pressed and not self._injecting:
+            self._last_paste = None
 
     def _start_recording(self) -> None:
         self.app.start_recording()
@@ -274,14 +369,12 @@ class DictateDaemon:
             print(f"[Daemon] Timing: transcribe {t_transcribe:.1f}s, "
                   f"refine {t_refine:.1f}s")
 
-            self.app.copy_to_clipboard(final_text)
-            time.sleep(0.05)  # let the clipboard write land before the paste keystroke
-
             now_hwnd, now_title = _foreground_window()
             if (self.config.get("verify_window", True)
                     and target_hwnd is not None and now_hwnd != target_hwnd):
                 # The user moved on while we were working. Pasting now would
                 # land in the wrong app; leave it on the clipboard instead.
+                self.app.copy_to_clipboard(final_text)
                 print(f"[Daemon] Focus moved {target_title!r} -> {now_title!r}; "
                       f"paste withheld, text on clipboard")
                 append_entry("held (focus moved)",
@@ -290,22 +383,52 @@ class DictateDaemon:
                 self.root.after(0, lambda: self.overlay.show_held(final_text))
                 return
 
+            # Same window, nothing typed or clicked since the last paste:
+            # this dictation continues the previous one, so repair the seam.
+            backspaces, paste_text = 0, final_text
+            lp = self._last_paste
+            if (self.config.get("continuation_join", True)
+                    and lp and target_hwnd is not None
+                    and lp["hwnd"] == target_hwnd):
+                backspaces, paste_text = _join_continuation(
+                    lp["text"], final_text,
+                    self.config.get("vocabulary_terms", []))
+                if backspaces or paste_text != final_text:
+                    print(f"[Daemon] Continuation join: {backspaces} backspace(s), "
+                          f"seam {lp['text'][-20:]!r} + {paste_text[:20]!r}")
+
+            self.app.copy_to_clipboard(paste_text)
+            time.sleep(0.05)  # let the clipboard write land before the paste keystroke
+
             print(f"[Daemon] Pasting into: {now_title!r}")
             append_entry("pasted into", now_title or "(unknown window)")
-            self._paste()
+            self._paste(backspaces)
+            # Only the tail matters for the next seam, so remembering just
+            # this chunk is enough.
+            self._last_paste = {"hwnd": now_hwnd, "text": paste_text}
 
             self._cue("pasted")
-            self.root.after(0, lambda: self.overlay.show_pasted(final_text))
+            self.root.after(0, lambda: self.overlay.show_pasted(paste_text))
         except Exception as e:
             print(f"[Daemon] Dictation failed: {e}")
             self._cue("error")
             self.root.after(0, lambda: self.overlay.show_error(str(e)))
 
-    def _paste(self) -> None:
-        self.keyboard.press(Key.ctrl)
-        self.keyboard.press('v')
-        self.keyboard.release('v')
-        self.keyboard.release(Key.ctrl)
+    def _paste(self, backspaces: int = 0) -> None:
+        # Injected keystrokes echo back through our own pynput listeners;
+        # the flag keeps them from clearing the continuation state.
+        self._injecting = True
+        try:
+            for _ in range(backspaces):
+                self.keyboard.press(Key.backspace)
+                self.keyboard.release(Key.backspace)
+            self.keyboard.press(Key.ctrl)
+            self.keyboard.press('v')
+            self.keyboard.release('v')
+            self.keyboard.release(Key.ctrl)
+            time.sleep(0.15)  # let the echoed events drain before re-arming
+        finally:
+            self._injecting = False
 
     def _on_audio_level(self, level: float) -> None:
         self.root.after(0, lambda: self.overlay.update_audio_level(level))
@@ -344,6 +467,8 @@ class DictateDaemon:
         clear_daemon_lock()
         if self.hotkey_listener:
             self.hotkey_listener.stop()
+        if self._mouse_listener:
+            self._mouse_listener.stop()
         if self.system_tray:
             self.system_tray.stop()
         self.app.cleanup()

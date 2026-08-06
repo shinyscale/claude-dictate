@@ -773,7 +773,17 @@ class ClaudeDictateGUI(ctk.CTk):
             model = self.config.get("default_model", "")
             url_key = {"ollama": "ollama_url", "f235": "f235_url"}.get(
                 backend, "lm_studio_url")
-            status = get_model_status(backend, self.config.get(url_key, ""), model)
+            urls = {
+                "ollama": self.config.get("ollama_url", ""),
+                "lm_studio": self.config.get("lm_studio_url", ""),
+                "f235": self.config.get("f235_url", ""),
+            }
+            status = get_model_status(
+                backend, self.config.get(url_key, ""), model, urls=urls)
+            # Auto mode: show what it resolved to, not the literal "auto".
+            if "resolved_model" in status:
+                resolved = status["resolved_model"]
+                model = f"auto → {resolved}" if resolved else "auto (nothing loaded)"
             self.after(0, lambda: self._render_model_status(backend, model, status))
 
         threading.Thread(target=work, daemon=True).start()

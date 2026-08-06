@@ -42,7 +42,8 @@ class HotkeyListener:
         self,
         hotkey_combo: str,
         on_activate: Callable[[], None],
-        on_deactivate: Callable[[], None]
+        on_deactivate: Callable[[], None],
+        on_other_key: Optional[Callable[[], None]] = None
     ):
         """
         Initialize the hotkey listener.
@@ -51,9 +52,12 @@ class HotkeyListener:
             hotkey_combo: Hotkey combination string (e.g., "ctrl+shift")
             on_activate: Callback when hotkey is pressed
             on_deactivate: Callback when hotkey is released
+            on_other_key: Callback for any key press that is not part of the
+                hotkey (used to detect ordinary typing between dictations)
         """
         self.on_activate = on_activate
         self.on_deactivate = on_deactivate
+        self.on_other_key = on_other_key
         self.keys_pressed: Set = set()
         self.hotkey_keys = self._parse_hotkey(hotkey_combo)
         self.is_active = False
@@ -116,6 +120,11 @@ class HotkeyListener:
             if self.hotkey_keys.issubset(self.keys_pressed) and not self.is_active:
                 self.is_active = True
                 self.on_activate()
+
+        # Unnormalized keys (arrows, backspace, ...) still count as typing.
+        if self.on_other_key and (normalized is None
+                                  or normalized not in self.hotkey_keys):
+            self.on_other_key()
 
     def _handle_release(self, key) -> None:
         """Handle key release event."""
@@ -264,15 +273,16 @@ class ClaudeDictate:
             corrections=self.config.get("vocabulary_corrections", {}),
         )
         llm_backend = self.config.get("default_llm", "f235")
-        backend_url_key = {
-            "ollama": "ollama_url",
-            "f235": "f235_url",
-        }.get(llm_backend, "lm_studio_url")
         self.refiner = LLMRefiner(
             backend=llm_backend,
             model=self.config.get("default_model", "deepseek-ai/DeepSeek-V4-Flash-0731"),
-            base_url=self.config.get(backend_url_key, ""),
-            system_prompt=self.config.get("system_prompt", "")
+            system_prompt=self.config.get("system_prompt", ""),
+            # All three URLs, so backend "auto" knows where to probe.
+            urls={
+                "ollama": self.config.get("ollama_url", ""),
+                "lm_studio": self.config.get("lm_studio_url", ""),
+                "f235": self.config.get("f235_url", ""),
+            },
         )
         self.output_gen = OutputGenerator(
             output_dir=self.config.get("output_dir", "./outputs")
@@ -469,11 +479,12 @@ def main():
     parser.add_argument(
         "--llm",
         type=str,
-        choices=["ollama", "lm_studio", "f235"],
+        choices=["auto", "ollama", "lm_studio", "f235"],
         default="f235",
-        help="LLM backend"
+        help="LLM backend (auto = whichever engine has a model loaded)"
     )
-    parser.add_argument("--model", type=str, default="deepseek-ai/DeepSeek-V4-Flash-0731", help="LLM model name")
+    parser.add_argument("--model", type=str, default="deepseek-ai/DeepSeek-V4-Flash-0731",
+                        help="LLM model name (auto = whatever model is loaded)")
 
     args = parser.parse_args()
 

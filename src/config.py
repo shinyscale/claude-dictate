@@ -64,6 +64,7 @@ DEFAULT_CONFIG = {
     "output_dir": "./outputs",
     "paste_mode": "raw",
     "verify_window": True,
+    "continuation_join": True,
     "minimize_to_tray": False,
     "audio_cues": False,
     # Window geometry (None means use defaults)
@@ -101,8 +102,8 @@ class AudioConfig:
 @dataclass
 class LLMConfig:
     """LLM refinement configuration."""
-    backend: str = "f235"  # ollama, lm_studio, or f235
-    model: str = "deepseek-ai/DeepSeek-V4-Flash-0731"
+    backend: str = "f235"  # ollama, lm_studio, f235, or auto (probe engines)
+    model: str = "deepseek-ai/DeepSeek-V4-Flash-0731"  # or "auto" = whatever is loaded
     ollama_url: str = "http://localhost:11434"
     lm_studio_url: str = "http://localhost:1234/v1"
     f235_url: str = "http://spark-f235:8000/v1"
@@ -130,6 +131,11 @@ class OutputConfig:
     # Only auto-paste if the window focused when the hotkey was released is
     # still focused when processing finishes; otherwise leave on clipboard.
     verify_window: bool = True
+    # When the next dictation lands in the same window with no typing or
+    # clicking in between, repair the seam between the two pastes: exactly
+    # one space, drop a stray Whisper period after a dangling function word,
+    # lowercase the next chunk's leading capital when resuming mid-sentence.
+    continuation_join: bool = True
 
 
 @dataclass
@@ -240,6 +246,7 @@ class AppConfig:
             "output_dir": self.output.output_dir,
             "paste_mode": self.output.paste_mode,
             "verify_window": self.output.verify_window,
+            "continuation_join": self.output.continuation_join,
             "minimize_to_tray": self.system.minimize_to_tray,
             "audio_cues": self.system.audio_cues,
             "window_width": self.window.width,
@@ -301,6 +308,7 @@ class AppConfig:
                     output_dir=data.get("output_dir", "./outputs"),
                     paste_mode=data.get("paste_mode", "raw"),
                     verify_window=data.get("verify_window", True),
+                    continuation_join=data.get("continuation_join", True),
                 ),
                 window=WindowConfig(
                     width=data.get("window_width"),
