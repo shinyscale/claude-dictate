@@ -41,6 +41,15 @@ DEFAULT_CORRECTIONS = {
 }
 
 
+# Windows whose focused presence means "paste with the terminal combo".
+# Matched case-insensitively as substrings against the foreground window's
+# class name and title. CASCADIA_HOSTING_WINDOW_CLASS is Windows Terminal.
+DEFAULT_TERMINAL_WINDOWS = [
+    "CASCADIA_HOSTING_WINDOW_CLASS", "mintty", "PuTTY",
+    "alacritty", "wezterm", "kitty",
+]
+
+
 # Default configuration dict (for backwards compatibility)
 DEFAULT_CONFIG = {
     "whisper_cpp_path": "",
@@ -65,6 +74,9 @@ DEFAULT_CONFIG = {
     "paste_mode": "raw",
     "verify_window": True,
     "continuation_join": True,
+    "paste_key": "ctrl+v",
+    "terminal_paste_key": "ctrl+shift+v",
+    "terminal_windows": list(DEFAULT_TERMINAL_WINDOWS),
     "minimize_to_tray": False,
     "audio_cues": False,
     # Window geometry (None means use defaults)
@@ -136,6 +148,13 @@ class OutputConfig:
     # one space, drop a stray Whisper period after a dangling function word,
     # lowercase the next chunk's leading capital when resuming mid-sentence.
     continuation_join: bool = True
+    # Keystroke used to paste. Terminal emulators treat Ctrl+V as a literal
+    # control byte, so windows matching terminal_windows (class or title
+    # substring) get terminal_paste_key instead.
+    paste_key: str = "ctrl+v"
+    terminal_paste_key: str = "ctrl+shift+v"
+    terminal_windows: List[str] = field(
+        default_factory=lambda: list(DEFAULT_TERMINAL_WINDOWS))
 
 
 @dataclass
@@ -247,6 +266,9 @@ class AppConfig:
             "paste_mode": self.output.paste_mode,
             "verify_window": self.output.verify_window,
             "continuation_join": self.output.continuation_join,
+            "paste_key": self.output.paste_key,
+            "terminal_paste_key": self.output.terminal_paste_key,
+            "terminal_windows": self.output.terminal_windows,
             "minimize_to_tray": self.system.minimize_to_tray,
             "audio_cues": self.system.audio_cues,
             "window_width": self.window.width,
@@ -309,6 +331,10 @@ class AppConfig:
                     paste_mode=data.get("paste_mode", "raw"),
                     verify_window=data.get("verify_window", True),
                     continuation_join=data.get("continuation_join", True),
+                    paste_key=data.get("paste_key", "ctrl+v"),
+                    terminal_paste_key=data.get("terminal_paste_key", "ctrl+shift+v"),
+                    terminal_windows=data.get(
+                        "terminal_windows", list(DEFAULT_TERMINAL_WINDOWS)),
                 ),
                 window=WindowConfig(
                     width=data.get("window_width"),

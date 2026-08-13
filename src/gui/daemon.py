@@ -118,18 +118,20 @@ def _join_continuation(prev: str, new: str, vocab) -> tuple:
 
 
 def _foreground_window() -> tuple:
-    """(hwnd, title) of the window that currently owns keyboard focus."""
+    """(hwnd, title, class_name) of the window that owns keyboard focus."""
     if os.name != "nt":
-        return (None, "")
+        return (None, "", "")
     try:
         user32 = ctypes.windll.user32
         hwnd = user32.GetForegroundWindow()
         length = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
-        return (hwnd, buf.value)
+        cls = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, cls, 256)
+        return (hwnd, buf.value, cls.value)
     except Exception:
-        return (None, "")
+        return (None, "", "")
 
 
 class DictateDaemon:
@@ -304,6 +306,8 @@ class DictateDaemon:
             self._last_paste = None
 
     def _start_recording(self) -> None:
+        if self._injecting:
+            return  # a synthetic paste combo must never start a recording
         self.app.start_recording()
         self._cue("start")
         if self.system_tray and self.system_tray.is_running:
@@ -311,6 +315,8 @@ class DictateDaemon:
         self.root.after(0, self.overlay.show_recording)
 
     def _stop_recording(self) -> None:
+        if self._injecting:
+            return
         if self.system_tray and self.system_tray.is_running:
             self.system_tray.update_icon(recording=False)
         # The window focused at hotkey release is where the user was just
@@ -327,7 +333,7 @@ class DictateDaemon:
         # slowest moment is never the least communicative one. Raw/refined
         # history entries are written inside ClaudeDictate, giving the daemon
         # and the GUI editor one shared session log.
-        target_hwnd, target_title = target
+        target_hwnd, target_title, _target_cls = target
         try:
             self.root.after(0, self.overlay.show_transcribing)
             t0 = time.time()
@@ -369,7 +375,7 @@ class DictateDaemon:
             print(f"[Daemon] Timing: transcribe {t_transcribe:.1f}s, "
                   f"refine {t_refine:.1f}s")
 
-            now_hwnd, now_title = _foreground_window()
+            now_hwnd, now_title, now_cls = _foreground_window()
             if (self.config.get("verify_window", True)
                     and target_hwnd is not None and now_hwnd != target_hwnd):
                 # The user moved on while we were working. Pasting now would
@@ -400,9 +406,10 @@ class DictateDaemon:
             self.app.copy_to_clipboard(paste_text)
             time.sleep(0.05)  # let the clipboard write land before the paste keystroke
 
-            print(f"[Daemon] Pasting into: {now_title!r}")
+            combo = self._paste_combo_for(now_title, now_cls)
+            print(f"[Daemon] Pasting into: {now_title!r} ({combo})")
             append_entry("pasted into", now_title or "(unknown window)")
-            self._paste(backspaces)
+            self._paste(backspaces, combo)
             # Only the tail matters for the next seam, so remembering just
             # this chunk is enough.
             self._last_paste = {"hwnd": now_hwnd, "text": paste_text}
@@ -414,18 +421,38 @@ class DictateDaemon:
             self._cue("error")
             self.root.after(0, lambda: self.overlay.show_error(str(e)))
 
-    def _paste(self, backspaces: int = 0) -> None:
+    # Names accepted in paste-combo config strings ("ctrl+shift+v",
+    # "shift+insert", ...); anything else is sent as a literal character.
+    _COMBO_KEYS = {
+        "ctrl": Key.ctrl, "shift": Key.shift, "alt": Key.alt,
+        "cmd": Key.cmd, "insert": Key.insert,
+    }
+
+    def _paste_combo_for(self, title: str, cls: str) -> str:
+        """Terminal emulators paste with Ctrl+Shift+V -- to a terminal,
+        Ctrl+V is a literal control byte, not paste -- so pick the combo by
+        the focused window's class/title."""
+        needles = self.config.get("terminal_windows") or []
+        haystack = f"{cls} {title}".lower()
+        if any(n.lower() in haystack for n in needles):
+            return self.config.get("terminal_paste_key", "ctrl+shift+v")
+        return self.config.get("paste_key", "ctrl+v")
+
+    def _paste(self, backspaces: int = 0, combo: str = "ctrl+v") -> None:
         # Injected keystrokes echo back through our own pynput listeners;
-        # the flag keeps them from clearing the continuation state.
+        # the flag keeps them from clearing the continuation state (and from
+        # triggering the record hotkey when the combo overlaps it).
         self._injecting = True
         try:
             for _ in range(backspaces):
                 self.keyboard.press(Key.backspace)
                 self.keyboard.release(Key.backspace)
-            self.keyboard.press(Key.ctrl)
-            self.keyboard.press('v')
-            self.keyboard.release('v')
-            self.keyboard.release(Key.ctrl)
+            parts = [p for p in combo.lower().replace(" ", "").split("+") if p]
+            keys = [self._COMBO_KEYS.get(p, p) for p in parts]
+            for k in keys:
+                self.keyboard.press(k)
+            for k in reversed(keys):
+                self.keyboard.release(k)
             time.sleep(0.15)  # let the echoed events drain before re-arming
         finally:
             self._injecting = False
