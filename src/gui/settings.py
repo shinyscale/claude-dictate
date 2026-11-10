@@ -14,6 +14,8 @@ from pynput import keyboard
 from .theme import THEME, FONTS
 from .tray import is_tray_available, get_tray_error
 from ..audio import AudioRecorder
+from ..devices import match_device
+from .. import autostart
 from ..config import AppConfig
 
 
@@ -288,13 +290,17 @@ class SettingsPanel(ctk.CTkToplevel):
         if backend == "auto":
             return backend, ""
         if backend == "ollama":
-            url = self.ollama_url_var.get() or "http://localhost:11434"
+            url = self.ollama_url_var.get() or "http://127.0.0.1:11434"
             return backend, f"{url}/api/tags"
         if backend == "f235":
-            url = self.config.get("f235_url", "http://spark-f235:8000/v1")
+            url = self.config.get("f235_url", "http://spark-f235:8012/v1")
+            return backend, f"{url}/models"
+        if backend == "local":
+            url = self.local_url_var.get() if hasattr(self, "local_url_var") \
+                else self.config.get("local_url", "http://127.0.0.1:8012/v1")
             return backend, f"{url}/models"
         url = self.lm_studio_url_var.get() if hasattr(self, "lm_studio_url_var") \
-            else self.config.get("lm_studio_url", "http://localhost:1234/v1")
+            else self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
         return "lm_studio", f"{url}/models"
 
     def _fetch_models(self) -> None:
@@ -436,7 +442,7 @@ class SettingsPanel(ctk.CTkToplevel):
         url_row.pack(fill="x", pady=(4, 0))
 
         self.ollama_url_var = ctk.StringVar(
-            value=self.config.get("ollama_url", "http://localhost:11434")
+            value=self.config.get("ollama_url", "http://127.0.0.1:11434")
         )
         ctk.CTkEntry(
             url_row,
@@ -531,9 +537,15 @@ class SettingsPanel(ctk.CTkToplevel):
         self._add_section(content, "Alternative Backend (LM Studio)")
 
         self.lm_studio_url_var = ctk.StringVar(
-            value=self.config.get("lm_studio_url", "http://localhost:1234/v1")
+            value=self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
         )
         self._add_entry(content, "LM Studio URL:", self.lm_studio_url_var)
+
+        # Any other OpenAI-compatible server on this machine (llama.cpp, vLLM)
+        self.local_url_var = ctk.StringVar(
+            value=self.config.get("local_url", "http://127.0.0.1:8012/v1")
+        )
+        self._add_entry(content, "Local server URL:", self.local_url_var)
 
         self.llm_backend_var = ctk.StringVar(
             value=self.config.get("default_llm", "ollama")
@@ -542,7 +554,7 @@ class SettingsPanel(ctk.CTkToplevel):
             content,
             "Active Backend:",
             self.llm_backend_var,
-            ["auto", "ollama", "lm_studio", "f235"]
+            ["auto", "ollama", "lm_studio", "local", "f235"]
         )
         # Repopulate the model list whenever the backend changes, so the
         # dropdown always shows models the chosen backend can actually serve.
@@ -597,7 +609,13 @@ class SettingsPanel(ctk.CTkToplevel):
         # Find current device
         current_device_idx = self.config.get("audio_device_index", None)
         current_name = "Default"
-        if current_device_idx is not None:
+        saved_name = self.config.get("audio_device_name")
+        by_name = match_device(self.audio_devices, saved_name)
+        if by_name is not None:
+            # The saved name wins: indexes move when Windows renumbers.
+            current_name = next(d["name"] for d in self.audio_devices
+                                if d["index"] == by_name)
+        elif current_device_idx is not None:
             for d in self.audio_devices:
                 if d["index"] == current_device_idx:
                     current_name = d["name"]
@@ -683,6 +701,19 @@ class SettingsPanel(ctk.CTkToplevel):
         self._add_section(content, "System Tray")
 
         tray_available = is_tray_available()
+
+        self.autostart_var = ctk.BooleanVar(value=autostart.is_enabled())
+        if autostart.supported():
+            ctk.CTkCheckBox(
+                content,
+                text="Start Claude Dictate when I sign in to Windows",
+                variable=self.autostart_var,
+                font=FONTS["body"],
+                text_color=THEME["text_secondary"],
+                fg_color=THEME["accent"],
+                hover_color=THEME["accent_hover"],
+                border_color=THEME["border"]
+            ).pack(anchor="w", pady=6)
 
         self.minimize_to_tray_var = ctk.BooleanVar(
             value=self.config.get("minimize_to_tray", False) if tray_available else False
@@ -855,20 +886,28 @@ class SettingsPanel(ctk.CTkToplevel):
             self.config["default_model"] = model_choice
         self.config["ollama_url"] = self.ollama_url_var.get()
         self.config["lm_studio_url"] = self.lm_studio_url_var.get()
+        self.config["local_url"] = self.local_url_var.get()
         self.config["hotkey"] = self.hotkey_var.get()
         self.config["clear_hotkey"] = self.clear_hotkey_var.get()
         self.config["output_dir"] = self.output_dir_var.get()
         self.config["system_prompt"] = self.system_prompt_text.get("1.0", "end-1c")
         self.config["minimize_to_tray"] = self.minimize_to_tray_var.get()
 
+        # Not a config value: Windows itself holds the startup entry.
+        if autostart.supported() and \
+                self.autostart_var.get() != autostart.is_enabled():
+            autostart.set_enabled(self.autostart_var.get())
+
         # Save audio device
         mic_name = self.mic_var.get()
         if mic_name == "Default":
             self.config["audio_device_index"] = None
+            self.config["audio_device_name"] = None
         else:
             for d in self.audio_devices:
                 if d["name"] == mic_name:
                     self.config["audio_device_index"] = d["index"]
+                    self.config["audio_device_name"] = d["name"]
                     break
 
         # Persist settings to disk
@@ -894,8 +933,8 @@ class SettingsPanel(ctk.CTkToplevel):
         self.whisper_model_var.set("base.en")
         self.llm_backend_var.set("ollama")
         self.llm_model_var.set("llama3.1:8b")
-        self.ollama_url_var.set("http://localhost:11434")
-        self.lm_studio_url_var.set("http://localhost:1234/v1")
+        self.ollama_url_var.set("http://127.0.0.1:11434")
+        self.lm_studio_url_var.set("http://127.0.0.1:1234/v1")
         self.hotkey_var.set("ctrl+shift")
         self.clear_hotkey_var.set("ctrl+alt+x")
         self.output_dir_var.set("./outputs")

@@ -1,235 +1,152 @@
 # Claude Dictate
 
-> 🎤 Voice-to-Text Tool for Claude Code
+Hold a hotkey anywhere, talk, let go. What you said is typed into whatever
+window you were in.
 
-A local, privacy-first dictation tool that uses **whisper.cpp** for transcription and optionally refines text with local LLMs via **Ollama** or **LM Studio**. Perfect for creating prompts, PRDs, and documentation for Claude Code workflows.
+Everything runs on your own machine. Speech is recognised by
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) on your graphics
+card; an optional clean-up pass uses whatever local model you already have
+running (LM Studio, Ollama, llama.cpp, vLLM). Nothing is sent to a cloud
+service.
 
-![Claude Dictate](https://img.shields.io/badge/whisper.cpp-local-green) ![LLM](https://img.shields.io/badge/LLM-Ollama%20%7C%20LM%20Studio-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+Built for dictating into Claude Code and other chat boxes. Windows is the
+supported platform; the editor window and command-line mode also run on
+macOS and Linux.
 
-## ✨ Features
+## What it does
 
-- **🎤 Hold-to-Talk Recording** - Press and hold a hotkey to record, release to transcribe
-- **⚡ Local Transcription** - Uses whisper.cpp for fast, private, offline transcription
-- **🤖 LLM Refinement** - Optional text cleanup and formatting via Ollama or LM Studio
-- **📄 Multiple Export Formats** - Save as `.md`, `.prd`, or Claude Code prompts
-- **📋 Clipboard Integration** - One-click copy to clipboard
-- **🎨 Modern UI** - Clean, dark-themed interface built with CustomTkinter
-- **🔒 Privacy-First** - Everything runs locally, no data leaves your machine
+- **Hold-to-talk, auto-paste.** Hold `Ctrl+Shift`, speak, release. The text
+  is pasted where your cursor is. A small overlay shows recording,
+  transcribing and pasted.
+- **Lives in the tray.** No window. Right-click the tray icon for the menu.
+- **Knows your words.** A personal word list biases recognition toward the
+  names you actually say, and a fix-up table repairs the ones it still
+  mangles ("sticks halo" becomes "strixhalo").
+- **Joins sentences.** Dictate in several goes and the pieces are stitched
+  together: one space between them, no stray period or capital in the
+  middle of a sentence.
+- **Terminal-aware.** Pastes with `Ctrl+Shift+V` in terminals, `Ctrl+V`
+  everywhere else.
+- **Won't paste into the wrong window.** If you switch windows while it is
+  working, the text stays on the clipboard instead.
+- **Never loses a dictation.** Every transcription is appended to a history
+  file before anything else happens to it.
+- **Optional clean-up.** Say "refine this" at the end of a dictation, or
+  switch the tray menu to "Refine, then paste", and a local model removes
+  the ums and false starts. Raw is the default: it is instant and cannot
+  invent words.
+- **Spoken punctuation** for the two marks worth saying: "question mark" and
+  "exclamation point".
 
-## 🚀 Quick Start
+## Install (Windows)
 
-### Prerequisites
+You need Python 3.10, 3.11 or 3.12 and, for speed, an NVIDIA graphics card.
 
-- Python 3.9+
-- [Ollama](https://ollama.ai/) or [LM Studio](https://lmstudio.ai/) (optional, for text refinement)
-
-### Installation
-
-```bash
-# Clone or download this repository
+```
+git clone https://github.com/shinyscale/claude-dictate
 cd claude-dictate
-
-# Run the setup script (installs whisper.cpp and models)
-chmod +x setup.sh
-./setup.sh
-
-# Or manually install dependencies
-pip install -r requirements.txt
+install_windows.bat
 ```
 
-### Running
+The installer makes a private Python environment in the folder, installs the
+packages, downloads the speech model (about 1.6 GB, once) and runs a
+check-up. Every line of the check-up starts with `OK`, `WARN` or `FAIL`.
 
-```bash
-# GUI mode (default)
-python claude_dictate.py --gui
+Then choose your microphone by name (any part of the name works):
 
-# Or just
-python claude_dictate.py
-
-# CLI mode - single recording
-python claude_dictate.py --record
+```
+venv\Scripts\python doctor.py --set-mic "IN 1-2"
 ```
 
-## 🎯 Usage
+and start it:
 
-### GUI Mode
-
-1. **Launch the app**: `python claude_dictate.py`
-2. **Record**: Hold `Ctrl+Shift` or click and hold the record button
-3. **Transcribe**: Release to automatically transcribe
-4. **Refine** (optional): Click "Refine with LLM" to clean up the text
-5. **Export**: Copy to clipboard or save as `.md`, `.prd`, or prompt file
-
-### CLI Mode
-
-```bash
-# Record and copy to clipboard
-python claude_dictate.py --record --output clipboard
-
-# Record and save as markdown
-python claude_dictate.py --record --output md
-
-# Record, refine, and save as PRD
-python claude_dictate.py --record --refine --style professional --output prd
-
-# Use LM Studio instead of Ollama
-python claude_dictate.py --record --llm lm_studio --model mistral
+```
+run_windows.bat
 ```
 
-### Keyboard Shortcuts
+To have it start every time you sign in, right-click the tray icon and tick
+**Start when I sign in**.
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Shift` (hold) | Record audio |
-| Release | Stop recording and transcribe |
+## Using it
 
-## 📁 Output Formats
+| Do this | What happens |
+|---|---|
+| Hold `Ctrl+Shift`, talk, release | Your words are pasted where the cursor is |
+| End with "refine this" | That one dictation is cleaned up by the local model first |
+| Say "question mark" / "exclamation point" | `?` / `!` |
+| Tray menu: Paste raw transcript / Refine, then paste | Sets what happens by default |
+| Tray menu: Show Claude Dictate | Opens the editor window, with history and settings |
+| Tray menu: Start when I sign in | Turns starting with Windows on or off |
+| Tray menu: Open log | Opens the log file, for when something goes wrong |
 
-### Markdown (`.md`)
-Standard markdown file with your transcription/refined text.
+The editor window (`run_windows.bat --gui`) can also record, refine in
+several styles, and save as Markdown, a PRD, or a Claude Code prompt.
 
-### PRD (`.prd.md`)
-Product Requirements Document format compatible with Claude Code workflows:
+## Check-up
 
-```markdown
-# Product Requirements Document
-
-## Overview
-[Your dictated content]
-
-## User Stories
-- [ ] As a user, I want to...
-
-## Technical Requirements
-[To be filled]
-
-## Success Criteria
-- [ ] All requirements implemented
-- [ ] Tests passing
-- [ ] Documentation updated
+```
+venv\Scripts\python doctor.py                  check everything
+venv\Scripts\python doctor.py --mic 4          also record 4 s and transcribe it
+venv\Scripts\python doctor.py --wav clip.wav   also transcribe a file
 ```
 
-### Claude Code Prompt
-Formatted for use with Claude Code's Ralph Wiggum workflow:
+It reports the saved microphone, whether the graphics card is used, how fast
+the speech model is, which clean-up model answered, and where the log is.
+It changes nothing unless you pass `--set-mic`.
 
-```markdown
-# Claude Code Prompt
+## Settings
 
-[Your dictated content]
+Settings are in the editor window (Settings button) and are saved to
+`%APPDATA%\ClaudeDictate\config.json`. The ones that matter:
 
----
-## Completion Criteria
-When complete, output: <promise>DONE</promise>
+| Setting | Default | Meaning |
+|---|---|---|
+| `whisper.model` | `large-v3-turbo` | Speech model. Smaller ones (`small.en`, `base.en`) are faster on a machine without a graphics card. |
+| `audio.device_name` | none (Windows default) | The microphone, remembered by name so it survives Windows renumbering devices. |
+| `hotkey.record_hotkey` | `ctrl+shift` | Hold-to-talk keys. |
+| `output.paste_mode` | `raw` | `raw` or `refined`. |
+| `llm.backend` | `auto` | `auto`, `lm_studio`, `ollama`, `local` or `f235`. `auto` uses whichever one has a model loaded right now and never loads one itself. |
+| `llm.model` | `auto` | A model name, or `auto` for whatever is loaded. |
+| `llm.local_url` | `http://127.0.0.1:8012/v1` | Any OpenAI-compatible server on this machine (llama.cpp, vLLM). |
+| `vocabulary.terms` | a starter list | Words to bias recognition toward. Keep it short: only about the last 200 tokens count. |
+| `vocabulary.corrections` | a starter table | "heard this" to "write this" fix-ups, applied after recognition. |
+| `output.terminal_windows` | common terminals | Windows that get `Ctrl+Shift+V`. |
 
-## Process
-1. Analyze the requirements above
-2. Plan the implementation
-3. Execute step by step
-4. Verify each step works
-5. Test the final result
+The same folder holds `history.md` (every dictation) and `dictate.log`.
+
+## When something is off
+
+Run the check-up first; it names the problem in plain words. The usual ones:
+
+- **Nothing is pasted, or the wrong thing is.** Open the log from the tray
+  menu. Each dictation logs what it heard, how long each step took, and
+  which window it pasted into.
+- **Microphone FAIL, "dead silent".** Wrong input chosen, the input is
+  muted, or the mic is unplugged. Run `doctor.py --set-mic "part of name"`.
+- **"no graphics card visible".** Speech falls back to the processor and is
+  slow. Re-run `install_windows.bat`; it installs the NVIDIA libraries the
+  speech engine needs.
+- **Clean-up does nothing.** No local model is running. Raw dictation still
+  works; start LM Studio, Ollama or your model server and try again.
+- **It pastes `^V` into a terminal.** Add part of that terminal's window
+  title to `terminal_windows`.
+
+## Tests
+
+```
+venv\Scripts\python -m unittest discover -s tests -v
 ```
 
-## ⚙️ Configuration
+They need no microphone, display, graphics card or model server.
 
-Edit `config.json` or use the Settings panel in the GUI:
+## License
 
-```json
-{
-    "whisper_cpp_path": "/path/to/whisper.cpp/main",
-    "whisper_model": "base.en",
-    "hotkey": "ctrl+shift",
-    "ollama_url": "http://localhost:11434",
-    "lm_studio_url": "http://localhost:1234/v1",
-    "default_llm": "ollama",
-    "default_model": "llama3.2",
-    "output_dir": "./outputs"
-}
-```
+MIT. See [LICENSE](LICENSE).
 
-### Whisper Models
+## Credits
 
-| Model | Size | Speed | Accuracy |
-|-------|------|-------|----------|
-| `tiny.en` | 75 MB | Fastest | Basic |
-| `base.en` | 142 MB | Fast | Good |
-| `small.en` | 466 MB | Medium | Better |
-| `medium.en` | 1.5 GB | Slow | Great |
-| `large` | 2.9 GB | Slowest | Best |
-
-### LLM Refinement Styles
-
-- **Clean**: Fix grammar, remove filler words, improve readability
-- **Professional**: Polish for professional communication
-- **Technical**: Format for technical documentation
-- **Casual**: Keep conversational tone while fixing errors
-
-## 🔧 Troubleshooting
-
-### No audio input
-- Check microphone permissions
-- On macOS: System Preferences → Security & Privacy → Microphone
-- On Linux: Ensure PulseAudio/ALSA is configured
-
-### Whisper.cpp not found
-- Run `./setup.sh` to install whisper.cpp
-- Or set the path manually in config.json
-
-### LLM refinement not working
-- Ensure Ollama is running: `ollama serve`
-- Or start LM Studio's local server
-- Check the URL in settings matches your setup
-
-### Hotkey not working
-- On macOS: Grant accessibility permissions to Terminal/Python
-- On Linux: May require running with elevated privileges for global hotkeys
-- Try a different hotkey combination in settings
-
-## 📦 Dependencies
-
-- `pyaudio` - Audio recording
-- `keyboard` - Global hotkey binding
-- `pyperclip` - Clipboard operations
-- `requests` - HTTP client for LLM APIs
-- `customtkinter` - Modern GUI framework
-- `whisper.cpp` - Local speech recognition (external)
-
-## 🤝 Integration with Claude Code
-
-### Using with Ralph Wiggum Plugin
-
-1. Dictate your task description
-2. Save as Claude Code Prompt
-3. Use in Ralph loop:
-
-```bash
-/ralph-loop "$(cat outputs/prompt_*.md)" --max-iterations 20
-```
-
-### Custom Slash Commands
-
-Save dictated prompts directly to Claude Code commands:
-
-```python
-# In the app, use "Save as Claude Code Prompt"
-# Files are saved to ~/.claude/commands/
-```
-
-Then use in Claude Code:
-```
-/user:your-command-name
-```
-
-## 📄 License
-
-MIT License - feel free to use and modify for your needs.
-
-## 🙏 Credits
-
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) - Fast C/C++ Whisper implementation
-- [Ollama](https://ollama.ai/) - Local LLM runner
-- [LM Studio](https://lmstudio.ai/) - LLM GUI
-- [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) - Modern Tkinter widgets
-
----
-
-*Built for the Claude Code community* 🚀
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) and
+[CTranslate2](https://github.com/OpenNMT/CTranslate2) for speech,
+[CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) for the
+window, [pystray](https://github.com/moses-palmer/pystray) and
+[pynput](https://github.com/moses-palmer/pynput) for the tray and hotkeys.

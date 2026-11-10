@@ -27,94 +27,11 @@ from .overlay import FloatingOverlay
 from ..main import ClaudeDictate, HotkeyListener
 from ..config import AppConfig
 from ..history import append_entry, mark_session_start
-from ..lockfile import write_daemon_lock, clear_daemon_lock
+from ..lockfile import write_daemon_lock, clear_daemon_lock, daemon_running
 from ..refiner import get_model_status, resolve_llm
-
-
-# Spoken at the very end of a dictation, this asks for the LLM pass on just
-# this one dictation, regardless of the configured paste mode. Trailing-only
-# and tightly worded so ordinary sentences can't trip it.
-_REFINE_CMD = re.compile(r"\brefine\s+(?:this|that|it)\b[\s.!?]*$", re.IGNORECASE)
-
-
-def _strip_refine_command(text: str) -> tuple:
-    """(refine_requested, text with the spoken command removed).
-
-    Loops because the command can appear repeated at the tail ("Refine
-    this. Refine this.") when the user says it more than once."""
-    requested = False
-    while True:
-        m = _REFINE_CMD.search(text)
-        if not m:
-            return requested, text
-        requested = True
-        text = text[:m.start()].rstrip()
-
-
-# Sentence-terminal punctuation, and the quote/bracket characters that may
-# legitimately trail it ("...done.").
-_SENT_END = ".!?…"
-_WRAPPERS = "\"'”’)]}»"
-
-# Words no English sentence ends on. Whisper transcribes each dictation in
-# isolation and routinely appends a period to an unfinished sentence; a
-# trailing "...and the." is a fake sentence break, not a real one.
-_FUNCTION_WORDS = frozenset("""
-    a an the and or but nor so yet to of in on at by for with from into onto
-    over under about above below after before between during through against
-    without within around because although though while if when whenever
-    unless until since that which who whom whose where why how than as is are
-    was were be been being am do does did have has had having will would
-    shall should can could may might must not very really quite just also
-    then even still only both either neither each every some any no my your
-    his her its our their this these those it's don't doesn't isn't aren't
-    won't wouldn't couldn't shouldn't
-""".split())
-
-_I_PRONOUN = re.compile(r"^[Ii](?:$|['’])")
-
-
-def _join_continuation(prev: str, new: str, vocab) -> tuple:
-    """How to append `new` after previously-pasted `prev` in the same field.
-
-    Returns (backspaces, text): press Backspace `backspaces` times, then
-    paste `text`. Repairs the seam Whisper can't see: exactly one space
-    between chunks; if `prev` broke off mid-sentence, erase the fake
-    trailing period (dangling function word) and de-capitalize `new`'s
-    first word — unless it's "I", an acronym, or a vocabulary proper noun.
-    """
-    prev_r = prev.rstrip()
-    if not prev_r or not new:
-        return 0, new
-
-    core = prev_r.rstrip(_WRAPPERS)
-    backspaces = 0
-    if core and core[-1] not in _SENT_END:
-        mid_thought = True  # ends on a bare word, comma, colon, dash...
-    else:
-        m = re.search(r"([A-Za-z'’]+)([.!?…]+)$", core)
-        mid_thought = bool(
-            m and m.group(1).lower().rstrip("'’") in _FUNCTION_WORDS)
-        if mid_thought and core == prev_r:
-            # No quotes in the way: erase the fake period (plus any
-            # trailing whitespace) so the sentence reads straight through.
-            backspaces = (len(prev) - len(prev_r)) + len(m.group(2))
-
-    if mid_thought:
-        first_word = re.match(r"[A-Za-z'’\-]+", new)
-        w = first_word.group(0) if first_word else new[0]
-        keep_capital = (
-            _I_PRONOUN.match(w) is not None
-            or (len(w) > 1 and any(c.isupper() for c in w[1:]))  # DeepSeek, ACX
-            or any(v and v.split()[0].lower() == w.lower()
-                   and v.split()[0][:1].isupper() for v in vocab)
-        )
-        if new[0].isupper() and not keep_capital:
-            new = new[0].lower() + new[1:]
-    elif new[0].islower():
-        new = new[0].upper() + new[1:]
-
-    return backspaces, " " + new
+from ..seams import strip_refine_command, join_continuation
+from ..logfile import start_logging, open_log
+from .. import autostart
 
 
 def _foreground_window() -> tuple:
@@ -184,6 +101,57 @@ class DictateDaemon:
         self._bind_hotkey()
         self._init_tray()
 
+        # Settings are edited in the separate editor process. Watching the
+        # file is how a new hotkey, microphone or word list reaches this one
+        # without a restart (2026-11-09: a hotkey changed in Settings was
+        # ignored until the tray app was quit and started again).
+        self._config_seen = self._config_mtime()
+        self.root.after(1500, self._watch_config)
+
+    # -- settings changed on disk --
+
+    @staticmethod
+    def _config_mtime() -> Optional[float]:
+        try:
+            return AppConfig.get_config_path().stat().st_mtime
+        except OSError:
+            return None
+
+    def _watch_config(self) -> None:
+        try:
+            seen = self._config_mtime()
+            # Never swap things out from under a recording in progress.
+            if seen != self._config_seen and not self.app.recorder.is_recording:
+                self._config_seen = seen
+                self._reload_config()
+        except Exception as e:
+            print(f"[Daemon] Settings reload failed: {e}")
+        finally:
+            self.root.after(1500, self._watch_config)
+
+    def _reload_config(self) -> None:
+        new = AppConfig.load().to_flat_dict()
+        if new == self.config:
+            return  # our own save (tray paste-mode switch), nothing to do
+        changed = sorted(k for k in set(new) | set(self.config)
+                         if new.get(k) != self.config.get(k))
+        self.config = new
+
+        self.app.cleanup()
+        self.app = ClaudeDictate(self.config)
+        self.app.recorder.on_level_update = self._on_audio_level
+        self.app.on_status_update = self._on_status
+
+        if self.hotkey_listener:
+            self.hotkey_listener.stop()
+        self._bind_hotkey()
+        self._last_paste = None
+        if self.system_tray and self.system_tray.icon:
+            self.system_tray.icon.update_menu()
+        print(f"[Daemon] Settings reloaded ({', '.join(changed)})")
+        # A different speech or clean-up model pays its load cost now.
+        threading.Thread(target=self._warm_backends, daemon=True).start()
+
     # -- warmup --
 
     def _warm_backends(self) -> None:
@@ -197,7 +165,7 @@ class DictateDaemon:
             if r.backend == "auto" or r.model == "auto":
                 # Auto mode rides whatever is already resident, so warming
                 # must not load (or evict) anything -- just report.
-                resolved = resolve_llm(r.backend, r.model, r.urls)
+                resolved = r._resolve()
                 if resolved:
                     b, _, m = resolved
                     print(f"[Daemon] LLM auto mode: '{m}' already loaded ({b})")
@@ -340,13 +308,27 @@ class DictateDaemon:
             transcript = self.app.stop_recording()
             t_transcribe = time.time() - t0
             if not transcript:
+                # Say why, in the log and on the overlay: a tap, a silent
+                # microphone and unintelligible audio need different fixes.
+                rec = self.app.recorder
+                if rec.last_seconds < 0.4:
+                    why, label = "the keys were held too briefly", "Too short"
+                elif rec.last_peak < 0.003:
+                    why, label = ("the microphone was silent (wrong input, "
+                                  "muted or unplugged)"), "No sound"
+                else:
+                    why, label = "no speech was recognised", None
+                print(f"[Daemon] Nothing to paste: {why} "
+                      f"(held {rec.last_seconds:.1f} s, mic peak {rec.last_peak:.4f})")
                 self._cue("empty")
-                self.root.after(0, self.overlay.show_empty)
+                self.root.after(
+                    0, lambda: self.overlay.set_state("empty", label=label)
+                    if label else self.overlay.show_empty())
                 return
 
             # Saying "refine this" at the end of a dictation requests the LLM
             # pass for just this one, whatever the configured mode.
-            refine_requested, transcript = _strip_refine_command(transcript)
+            refine_requested, transcript = strip_refine_command(transcript)
             if refine_requested and not transcript:
                 # The whole dictation was the command itself.
                 self._cue("empty")
@@ -396,7 +378,7 @@ class DictateDaemon:
             if (self.config.get("continuation_join", True)
                     and lp and target_hwnd is not None
                     and lp["hwnd"] == target_hwnd):
-                backspaces, paste_text = _join_continuation(
+                backspaces, paste_text = join_continuation(
                     lp["text"], final_text,
                     self.config.get("vocabulary_terms", []))
                 if backspaces or paste_text != final_text:
@@ -475,6 +457,9 @@ class DictateDaemon:
             on_exit=self._exit,
             paste_mode_getter=lambda: self.config.get("paste_mode", "raw"),
             on_paste_mode_change=self._set_paste_mode,
+            autostart_getter=autostart.is_enabled if autostart.supported() else None,
+            on_autostart_toggle=self._toggle_autostart,
+            on_open_log=open_log,
         )
         self.system_tray.start()
 
@@ -485,6 +470,10 @@ class DictateDaemon:
         except Exception as e:
             print(f"[Daemon] Could not persist paste mode: {e}")
         print(f"[Daemon] Paste mode: {mode}")
+
+    def _toggle_autostart(self) -> None:
+        now = autostart.set_enabled(not autostart.is_enabled())
+        print(f"[Daemon] Start at sign-in: {'on' if now else 'off'}")
 
     def _open_editor(self) -> None:
         run_py = Path(__file__).resolve().parents[2] / "run.py"
@@ -508,5 +497,20 @@ class DictateDaemon:
 
 def run_daemon() -> None:
     """Entry point: run Claude Dictate as a tray daemon with global hold-to-talk."""
-    daemon = DictateDaemon()
-    daemon.run()
+    # First, so everything after it -- including a crash while starting --
+    # lands in the log instead of a console that may not exist.
+    path = start_logging()
+    if daemon_running():
+        # Started at sign-in AND by hand: two copies would both hear the
+        # hotkey and paste every dictation twice.
+        print("[Daemon] Claude Dictate is already running in the tray; "
+              "this second copy is closing.")
+        return
+    try:
+        daemon = DictateDaemon()
+        daemon.run()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        print(f"[Daemon] Stopped on an error; see {path}")
+        raise

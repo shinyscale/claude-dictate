@@ -8,7 +8,11 @@ import sys
 import os
 
 # Add src to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+# Started at sign-in, the working folder is wherever Windows felt like
+# (often System32); relative paths such as ./outputs must not land there.
+os.chdir(HERE)
 
 from src.main import main
 

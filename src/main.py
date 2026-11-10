@@ -264,7 +264,8 @@ class ClaudeDictate:
             sample_rate=self.config.get("sample_rate", 16000),
             channels=self.config.get("channels", 1),
             chunk_size=self.config.get("chunk_size", 1024),
-            device_index=self.config.get("audio_device_index", None)
+            device_index=self.config.get("audio_device_index", None),
+            device_name=self.config.get("audio_device_name", None),
         )
         self.transcriber = WhisperTranscriber(
             whisper_path=self.config.get("whisper_cpp_path", ""),
@@ -272,15 +273,16 @@ class ClaudeDictate:
             vocabulary=self.config.get("vocabulary_terms", []),
             corrections=self.config.get("vocabulary_corrections", {}),
         )
-        llm_backend = self.config.get("default_llm", "f235")
+        llm_backend = self.config.get("default_llm", "auto")
         self.refiner = LLMRefiner(
             backend=llm_backend,
-            model=self.config.get("default_model", "deepseek-ai/DeepSeek-V4-Flash-0731"),
+            model=self.config.get("default_model", "auto"),
             system_prompt=self.config.get("system_prompt", ""),
-            # All three URLs, so backend "auto" knows where to probe.
+            # Every URL, so backend "auto" knows where to probe.
             urls={
                 "ollama": self.config.get("ollama_url", ""),
                 "lm_studio": self.config.get("lm_studio_url", ""),
+                "local": self.config.get("local_url", ""),
                 "f235": self.config.get("f235_url", ""),
             },
         )
@@ -479,11 +481,11 @@ def main():
     parser.add_argument(
         "--llm",
         type=str,
-        choices=["auto", "ollama", "lm_studio", "f235"],
-        default="f235",
+        choices=["auto", "ollama", "lm_studio", "local", "f235"],
+        default="auto",
         help="LLM backend (auto = whichever engine has a model loaded)"
     )
-    parser.add_argument("--model", type=str, default="deepseek-ai/DeepSeek-V4-Flash-0731",
+    parser.add_argument("--model", type=str, default="auto",
                         help="LLM model name (auto = whatever model is loaded)")
 
     args = parser.parse_args()

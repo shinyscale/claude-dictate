@@ -80,6 +80,9 @@ class SystemTray:
         on_exit: Optional[Callable] = None,
         paste_mode_getter: Optional[Callable[[], str]] = None,
         on_paste_mode_change: Optional[Callable[[str], None]] = None,
+        autostart_getter: Optional[Callable[[], bool]] = None,
+        on_autostart_toggle: Optional[Callable[[], None]] = None,
+        on_open_log: Optional[Callable[[], None]] = None,
     ):
         """
         Initialize the system tray.
@@ -91,12 +94,18 @@ class SystemTray:
             paste_mode_getter: Returns "raw" or "refined"; when provided,
                 the menu grows a radio pair for switching paste modes
             on_paste_mode_change: Called with the newly selected mode
+            autostart_getter / on_autostart_toggle: when both are provided,
+                the menu grows a "Start when I sign in" checkbox
+            on_open_log: when provided, the menu grows "Open log"
         """
         self.on_show = on_show
         self.on_settings = on_settings
         self.on_exit = on_exit
         self.paste_mode_getter = paste_mode_getter
         self.on_paste_mode_change = on_paste_mode_change
+        self.autostart_getter = autostart_getter
+        self.on_autostart_toggle = on_autostart_toggle
+        self.on_open_log = on_open_log
         self.icon: Optional["pystray.Icon"] = None
         self._running = False
         self._ready = threading.Event()
@@ -138,6 +147,19 @@ class SystemTray:
                 "Settings",
                 self._on_settings
             ),
+        ]
+        if self.autostart_getter and self.on_autostart_toggle:
+            items.append(pystray.MenuItem(
+                "Start when I sign in",
+                lambda icon, item: self._toggle_autostart(),
+                checked=lambda item: bool(self.autostart_getter()),
+            ))
+        if self.on_open_log:
+            items.append(pystray.MenuItem(
+                "Open log",
+                lambda icon, item: self.on_open_log(),
+            ))
+        items += [
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 "Exit",
@@ -149,6 +171,11 @@ class SystemTray:
     def _set_paste_mode(self, mode: str) -> None:
         if self.on_paste_mode_change:
             self.on_paste_mode_change(mode)
+        if self.icon:
+            self.icon.update_menu()
+
+    def _toggle_autostart(self) -> None:
+        self.on_autostart_toggle()
         if self.icon:
             self.icon.update_menu()
 
