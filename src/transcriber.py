@@ -225,11 +225,68 @@ def apply_spoken_punctuation(text: str) -> str:
     return "".join(out)
 
 
+def load_wav_samples(audio_path: str):
+    """The recording as float32 samples, or None if it isn't a plain
+    16 kHz mono 16-bit WAV (then faster-whisper decodes the file itself).
+
+    Our recorder always writes exactly that format, so the normal path
+    never touches PyAV -- whose releases have broken faster-whisper's file
+    decoding more than once ("open() got an unexpected keyword argument
+    'metadata_errors'", fresh install, 2026-11-09)."""
+    try:
+        import wave
+        import numpy as np
+        with wave.open(audio_path, "rb") as w:
+            if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (16000, 1, 2):
+                return None
+            raw = w.readframes(w.getnframes())
+        return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    except Exception:
+        return None
+
+
+_cuda_dirs_added = False
+
+
+def add_cuda_dll_dirs() -> List[str]:
+    """Windows only: make the pip-installed NVIDIA libraries findable.
+
+    CTranslate2 needs cuBLAS and cuDNN on the GPU path. The
+    nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels put the DLLs under
+    site-packages/nvidia/*/bin, which is on no search path, so without this
+    the model loads and then fails at the first transcription ("cublas64_12
+    .dll not found") and the app quietly falls back to slow CPU decoding.
+    Returns the directories added (empty elsewhere, or with a system CUDA).
+    """
+    global _cuda_dirs_added
+    if os.name != "nt" or _cuda_dirs_added:
+        return []
+    _cuda_dirs_added = True
+    added = []
+    try:
+        import site
+        roots = list(site.getsitepackages()) + [site.getusersitepackages()]
+    except Exception:
+        roots = []
+    for root in roots:
+        for bin_dir in Path(root).glob("nvidia/*/bin"):
+            if not bin_dir.is_dir():
+                continue
+            try:
+                os.add_dll_directory(str(bin_dir))
+            except Exception:
+                pass
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+            added.append(str(bin_dir))
+    return added
+
+
 def _load_faster_whisper(model: str, device: str, compute_type: str):
     """Get (or build) a cached faster-whisper model. Raises if unavailable."""
     key = (model, device, compute_type)
     with _model_lock:
         if key not in _model_cache:
+            add_cuda_dll_dirs()
             from faster_whisper import WhisperModel
             _model_cache[key] = WhisperModel(
                 model, device=device, compute_type=compute_type
@@ -240,6 +297,7 @@ def _load_faster_whisper(model: str, device: str, compute_type: str):
 def cuda_available() -> bool:
     """True if CTranslate2 can see a usable CUDA device."""
     try:
+        add_cuda_dll_dirs()
         import ctranslate2
         return ctranslate2.get_cuda_device_count() > 0
     except Exception:
@@ -304,11 +362,27 @@ class WhisperTranscriber:
         faster-whisper model is resident afterwards.
         """
         try:
-            _load_faster_whisper(self.fw_model_name, self.device, self.compute_type)
-            return True
+            model = _load_faster_whisper(
+                self.fw_model_name, self.device, self.compute_type)
         except Exception as e:
             print(f"faster-whisper preload failed: {e}")
             return False
+        # Loading the weights is not the whole cost: the first real
+        # transcription also initialises the GPU kernels and loads the
+        # voice-activity model (8 s measured on a fresh start, against well
+        # under 1 s afterwards). Pay that here, on a second of silence,
+        # instead of in front of the first dictation.
+        try:
+            import numpy as np
+            silence = np.zeros(16000, dtype=np.float32)
+            for vad in (False, True):
+                segments, _ = model.transcribe(
+                    silence, language=self.language, beam_size=1,
+                    vad_filter=vad, condition_on_previous_text=False)
+                list(segments)
+        except Exception as e:
+            print(f"faster-whisper warm-up skipped: {e}")
+        return True
 
     # -- transcription -----------------------------------------------------
 
@@ -344,8 +418,9 @@ class WhisperTranscriber:
             model = _load_faster_whisper(
                 self.fw_model_name, self.device, self.compute_type
             )
+            samples = load_wav_samples(audio_path)
             segments, _info = model.transcribe(
-                audio_path,
+                samples if samples is not None else audio_path,
                 language=self.language,
                 beam_size=1,
                 # Hold-to-talk clips are bookended by dead air from the key

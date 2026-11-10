@@ -771,11 +771,12 @@ class ClaudeDictateGUI(ctk.CTk):
         def work():
             backend = self.config.get("default_llm", "lm_studio")
             model = self.config.get("default_model", "")
-            url_key = {"ollama": "ollama_url", "f235": "f235_url"}.get(
-                backend, "lm_studio_url")
+            url_key = {"ollama": "ollama_url", "f235": "f235_url",
+                       "local": "local_url"}.get(backend, "lm_studio_url")
             urls = {
                 "ollama": self.config.get("ollama_url", ""),
                 "lm_studio": self.config.get("lm_studio_url", ""),
+                "local": self.config.get("local_url", ""),
                 "f235": self.config.get("f235_url", ""),
             }
             status = get_model_status(

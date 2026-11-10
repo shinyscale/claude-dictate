@@ -10,6 +10,8 @@ from typing import Optional, Callable, List
 
 import pyaudio
 
+from .devices import match_device
+
 
 class AudioRecorder:
     """Handles audio recording with push-to-talk functionality."""
@@ -20,7 +22,8 @@ class AudioRecorder:
         channels: int = 1,
         chunk_size: int = 1024,
         device_index: Optional[int] = None,
-        on_level_update: Optional[Callable[[float], None]] = None
+        on_level_update: Optional[Callable[[float], None]] = None,
+        device_name: Optional[str] = None,
     ):
         """
         Initialize the audio recorder.
@@ -31,12 +34,17 @@ class AudioRecorder:
             chunk_size: Size of audio chunks to read
             device_index: Index of input device (None for default)
             on_level_update: Callback for audio level updates (0.0-1.0)
+            device_name: Name of the input device. Wins over device_index:
+                it is looked up fresh for every recording, because Windows
+                renumbers indexes when devices or drivers change.
         """
         self.sample_rate = sample_rate
         self.channels = channels
         self.chunk_size = chunk_size
         self.device_index = device_index
+        self.device_name = device_name
         self.on_level_update = on_level_update
+        self._warned_missing = False
 
         self.audio: Optional[pyaudio.PyAudio] = None
         self.stream: Optional[pyaudio.Stream] = None
@@ -70,14 +78,32 @@ class AudioRecorder:
             audio.terminate()
         return devices
 
-    def set_device(self, device_index: Optional[int]) -> None:
-        """Set the input device index."""
+    def set_device(self, device_index: Optional[int],
+                   device_name: Optional[str] = None) -> None:
+        """Set the input device (name preferred, index as fallback)."""
         self.device_index = device_index
+        self.device_name = device_name
+        self._warned_missing = False
+
+    def _resolve_device(self) -> Optional[int]:
+        """Index to open for this recording. A saved name is looked up now;
+        if that microphone is gone, fall back to the system default rather
+        than to a stale index that may be a different input."""
+        if not self.device_name:
+            return self.device_index
+        found = match_device(self.get_input_devices(), self.device_name)
+        if found is None and not self._warned_missing:
+            self._warned_missing = True
+            print(f"[Audio] Microphone {self.device_name!r} not found; "
+                  f"using the system default input")
+        return found
 
     def start_recording(self) -> None:
         """Start recording audio."""
         if self.is_recording:
             return
+
+        device_index = self._resolve_device()
 
         self.frames = []
         self.is_recording = True
@@ -86,14 +112,20 @@ class AudioRecorder:
         if self.audio is None:
             self.audio = pyaudio.PyAudio()
 
-        self.stream = self.audio.open(
-            format=pyaudio.paInt16,
-            channels=self.channels,
-            rate=self.sample_rate,
-            input=True,
-            input_device_index=self.device_index,
-            frames_per_buffer=self.chunk_size
-        )
+        try:
+            self.stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=self.channels,
+                rate=self.sample_rate,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=self.chunk_size
+            )
+        except Exception:
+            # Leave no half-open state behind: the next hotkey press must be
+            # able to try again.
+            self.is_recording = False
+            raise
 
         self.record_thread = threading.Thread(target=self._record_loop, daemon=True)
         self.record_thread.start()

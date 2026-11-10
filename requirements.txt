@@ -20,8 +20,15 @@ requests>=2.31.0
 # GUI
 customtkinter>=5.2.0
 
-# Optional: Python whisper fallback (if whisper.cpp not available)
-# Uncomment if needed:
+# Speech recognition (the main path; uses the graphics card when it can)
+faster-whisper>=1.1.0
+
+# NVIDIA libraries faster-whisper needs on a Windows graphics card.
+# Skipped on other systems; harmless on a machine without an NVIDIA card.
+nvidia-cublas-cu12; sys_platform == "win32"
+nvidia-cudnn-cu12>=9,<10; sys_platform == "win32"
+
+# Optional: Python whisper fallback (CPU only, slow)
 # openai-whisper>=20231117
 
 # Optional: For better audio handling on some systems

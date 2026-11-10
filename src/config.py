@@ -6,7 +6,7 @@ Handles loading, saving, and validating configuration.
 import json
 import os
 from pathlib import Path
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from typing import Dict, List, Optional
 import shutil
 
@@ -21,6 +21,8 @@ DEFAULT_VOCABULARY = [
     "Deck Nine", "ACX", "Scripty", "DeepSeek", "Qwen", "LM Studio",
     "vLLM", "Tailscale", "Home Assistant", "Claude", "Anthropic",
     "faster-whisper", "CTranslate2", "Cloudflare Pages",
+    "Fool's Archery", "Red Weather", "Tower", "Lilli", "Halogen",
+    "Flash-Next", "Ralph loop", "orchestrator", "bosgame", "zandrews-114",
 ]
 
 # Deterministic fix-ups applied after decoding, for words Whisper reliably
@@ -38,6 +40,12 @@ DEFAULT_CORRECTIONS = {
     "deep seek": "DeepSeek",
     "lm studio": "LM Studio",
     "tail scale": "Tailscale",
+    "fools archery": "Fool's Archery",
+    "fool's archery": "Fool's Archery",
+    "red weather": "Red Weather",
+    "flash next": "Flash-Next",
+    "boss game": "bosgame",
+    "bos game": "bosgame",
 }
 
 
@@ -62,13 +70,15 @@ DEFAULT_CONFIG = {
     "channels": 1,
     "chunk_size": 1024,
     "audio_device_index": None,
+    "audio_device_name": None,
     "hotkey": "ctrl+shift",
     "clear_hotkey": "ctrl+alt+x",
-    "ollama_url": "http://localhost:11434",
-    "lm_studio_url": "http://localhost:1234/v1",
-    "f235_url": "http://spark-f235:8000/v1",
-    "default_llm": "f235",
-    "default_model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "ollama_url": "http://127.0.0.1:11434",
+    "lm_studio_url": "http://127.0.0.1:1234/v1",
+    "f235_url": "http://spark-f235:8012/v1",
+    "local_url": "http://127.0.0.1:8012/v1",
+    "default_llm": "auto",
+    "default_model": "auto",
     "system_prompt": "",
     "output_dir": "./outputs",
     "paste_mode": "raw",
@@ -85,6 +95,14 @@ DEFAULT_CONFIG = {
     "window_x": None,
     "window_y": None,
 }
+
+
+def _build(section_cls, data):
+    """Build one config section from saved data, ignoring keys this version
+    doesn't know. Without this, a settings file written by a newer (or
+    older) version raises TypeError and the app refuses to start."""
+    known = {f.name for f in fields(section_cls)}
+    return section_cls(**{k: v for k, v in (data or {}).items() if k in known})
 
 
 @dataclass
@@ -108,17 +126,25 @@ class AudioConfig:
     sample_rate: int = 16000
     channels: int = 1
     chunk_size: int = 1024
+    # The microphone is remembered by NAME. Windows renumbers device indexes
+    # when hardware or drivers change; the index is only a fallback for
+    # settings files written before the name was saved.
+    device_name: Optional[str] = None
     device_index: Optional[int] = None
 
 
 @dataclass
 class LLMConfig:
     """LLM refinement configuration."""
-    backend: str = "f235"  # ollama, lm_studio, f235, or auto (probe engines)
-    model: str = "deepseek-ai/DeepSeek-V4-Flash-0731"  # or "auto" = whatever is loaded
-    ollama_url: str = "http://localhost:11434"
-    lm_studio_url: str = "http://localhost:1234/v1"
-    f235_url: str = "http://spark-f235:8000/v1"
+    # ollama, lm_studio, local, f235, or auto (probe each, use what's loaded).
+    # "local" is any OpenAI-compatible server (llama.cpp, vLLM, ...) at
+    # local_url -- the setting that survives the next model move.
+    backend: str = "auto"
+    model: str = "auto"  # "auto" = whatever model the server has loaded
+    ollama_url: str = "http://127.0.0.1:11434"
+    lm_studio_url: str = "http://127.0.0.1:1234/v1"
+    local_url: str = "http://127.0.0.1:8012/v1"
+    f235_url: str = "http://spark-f235:8012/v1"
     temperature: float = 0.3
     max_tokens: int = 2048
     system_prompt: str = ""
@@ -254,11 +280,13 @@ class AppConfig:
             "channels": self.audio.channels,
             "chunk_size": self.audio.chunk_size,
             "audio_device_index": self.audio.device_index,
+            "audio_device_name": self.audio.device_name,
             "hotkey": self.hotkey.record_hotkey,
             "clear_hotkey": self.hotkey.clear_hotkey,
             "ollama_url": self.llm.ollama_url,
             "lm_studio_url": self.llm.lm_studio_url,
             "f235_url": self.llm.f235_url,
+            "local_url": self.llm.local_url,
             "default_llm": self.llm.backend,
             "default_model": self.llm.model,
             "system_prompt": self.llm.system_prompt,
@@ -286,14 +314,14 @@ class AppConfig:
             window_data = data.get("window", {})
             system_data = data.get("system", {})
             return cls(
-                whisper=WhisperConfig(**data.get("whisper", {})),
-                vocabulary=VocabularyConfig(**data.get("vocabulary", {})),
-                audio=AudioConfig(**data.get("audio", {})),
-                llm=LLMConfig(**data.get("llm", {})),
-                hotkey=HotkeyConfig(**data.get("hotkey", {})),
-                output=OutputConfig(**data.get("output", {})),
-                window=WindowConfig(**window_data) if window_data else WindowConfig(),
-                system=SystemConfig(**system_data) if system_data else SystemConfig(),
+                whisper=_build(WhisperConfig, data.get("whisper")),
+                vocabulary=_build(VocabularyConfig, data.get("vocabulary")),
+                audio=_build(AudioConfig, data.get("audio")),
+                llm=_build(LLMConfig, data.get("llm")),
+                hotkey=_build(HotkeyConfig, data.get("hotkey")),
+                output=_build(OutputConfig, data.get("output")),
+                window=_build(WindowConfig, window_data),
+                system=_build(SystemConfig, system_data),
             )
         else:
             # Flat format (backwards compatibility)
@@ -312,14 +340,16 @@ class AppConfig:
                     sample_rate=data.get("sample_rate", 16000),
                     channels=data.get("channels", 1),
                     chunk_size=data.get("chunk_size", 1024),
+                    device_name=data.get("audio_device_name"),
                     device_index=data.get("audio_device_index"),
                 ),
                 llm=LLMConfig(
-                    backend=data.get("default_llm", "f235"),
-                    model=data.get("default_model", "deepseek-ai/DeepSeek-V4-Flash-0731"),
-                    ollama_url=data.get("ollama_url", "http://localhost:11434"),
-                    lm_studio_url=data.get("lm_studio_url", "http://localhost:1234/v1"),
-                    f235_url=data.get("f235_url", "http://spark-f235:8000/v1"),
+                    backend=data.get("default_llm", "auto"),
+                    model=data.get("default_model", "auto"),
+                    ollama_url=data.get("ollama_url", "http://127.0.0.1:11434"),
+                    lm_studio_url=data.get("lm_studio_url", "http://127.0.0.1:1234/v1"),
+                    local_url=data.get("local_url", "http://127.0.0.1:8012/v1"),
+                    f235_url=data.get("f235_url", "http://spark-f235:8012/v1"),
                     system_prompt=data.get("system_prompt", ""),
                 ),
                 hotkey=HotkeyConfig(

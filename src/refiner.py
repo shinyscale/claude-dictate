@@ -5,6 +5,7 @@ Handles text refinement using local LLMs (Ollama or LM Studio).
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional, Callable, Generator
 
@@ -14,10 +15,33 @@ from .prompts import get_prompt, get_available_styles, SYSTEM_PROMPT
 
 
 DEFAULT_URLS = {
-    "ollama": "http://localhost:11434",
-    "f235": "http://spark-f235:8000/v1",
-    "lm_studio": "http://localhost:1234/v1",
+    # 127.0.0.1, not "localhost": on Windows "localhost" tries IPv6 first,
+    # and every connection to a port nothing listens on costs ~2 s.
+    "ollama": "http://127.0.0.1:11434",
+    "f235": "http://spark-f235:8012/v1",
+    "lm_studio": "http://127.0.0.1:1234/v1",
+    # Any OpenAI-compatible server on this machine (llama.cpp, vLLM, ...).
+    "local": "http://127.0.0.1:8012/v1",
 }
+
+# Order "auto" probes in: engines on this machine first, the Spark last.
+AUTO_ORDER = ("lm_studio", "ollama", "local", "f235")
+
+
+def _post_chat(base_url: str, payload: dict, **kwargs):
+    """POST /chat/completions with model thinking switched off.
+
+    Cleaning up a sentence needs no reasoning pass; on a thinking model it
+    is the difference between ~1 s and ~10 s per dictation (measured on
+    Qwen3.8-27B, 2026-11-09). chat_template_kwargs is a llama.cpp / vLLM
+    extension -- servers that reject unknown fields get the plain request.
+    """
+    url = f"{base_url}/chat/completions"
+    quiet = dict(payload, chat_template_kwargs={"enable_thinking": False})
+    response = requests.post(url, json=quiet, **kwargs)
+    if response.status_code in (400, 422):
+        response = requests.post(url, json=payload, **kwargs)
+    return response
 
 
 def detect_loaded_model(backend: str, base_url: str) -> Optional[str]:
@@ -57,17 +81,23 @@ def resolve_llm(backend: str, model: str, urls: Optional[dict] = None) -> Option
     """Resolve 'auto' backend/model settings to a concrete
     (backend, base_url, model), riding whatever is already resident rather
     than loading anything. Backend 'auto' probes LM Studio, then Ollama,
-    then f235. Returns None when nothing is loaded anywhere."""
+    then the local OpenAI-compatible server, then f235. Returns None when
+    nothing is loaded anywhere."""
     urls = urls or {}
 
     def url_for(b: str) -> str:
         return urls.get(b) or DEFAULT_URLS[b]
 
     if backend == "auto":
-        for b in ("lm_studio", "ollama", "f235"):
-            found = detect_loaded_model(b, url_for(b))
-            if found:
-                return b, url_for(b), found
+        # Asked all at once: an engine that isn't running takes seconds to
+        # say so on Windows, and asking in turn stacked those waits in front
+        # of every dictation (12 s measured). Preference order still decides.
+        with ThreadPoolExecutor(max_workers=len(AUTO_ORDER)) as pool:
+            found = list(pool.map(
+                lambda b: detect_loaded_model(b, url_for(b)), AUTO_ORDER))
+        for b, model_id in zip(AUTO_ORDER, found):
+            if model_id:
+                return b, url_for(b), model_id
         return None
     if model == "auto":
         found = detect_loaded_model(backend, url_for(backend))
@@ -137,6 +167,14 @@ def get_model_status(backend: str, base_url: str, model: str,
                             return {"state": "loaded",
                                     "size_gb": _lms_loaded_size_gb(model)}
                         return {"state": "not-loaded", "size_gb": None}
+            # Not LM Studio (llama.cpp, vLLM): these serve exactly what they
+            # have loaded, so being listed means being resident.
+            r = requests.get(f"{base_url}/models", timeout=3)
+            if r.status_code == 200:
+                ids = [m.get("id") for m in r.json().get("data", [])]
+                if model in ids:
+                    return {"state": "loaded", "size_gb": None}
+                return {"state": "not-loaded", "size_gb": None}
     except Exception:
         pass
     return {"state": "unknown", "size_gb": None}
@@ -160,15 +198,15 @@ class LLMRefiner:
         Initialize the LLM refiner.
 
         Args:
-            backend: LLM backend ("ollama", "lm_studio", "f235", or "auto"
-                     to ride whichever engine has a model loaded)
+            backend: LLM backend ("ollama", "lm_studio", "local", "f235",
+                     or "auto" to ride whichever engine has a model loaded)
             base_url: Base URL for the LLM API (fixed backends)
             model: Model name to use, or "auto" for whatever is loaded
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             system_prompt: Custom system prompt (uses default if empty)
             on_progress: Callback for streaming text updates
-            urls: Optional {"ollama"|"lm_studio"|"f235": url} overrides,
+            urls: Optional {"ollama"|"lm_studio"|"local"|"f235": url} overrides,
                   needed so backend "auto" knows where to probe
         """
         self.backend = backend
@@ -178,6 +216,7 @@ class LLMRefiner:
         self.system_prompt = system_prompt or SYSTEM_PROMPT
         self.on_progress = on_progress
 
+        self._last_resolved: Optional[tuple] = None
         self.urls = {k: v for k, v in (urls or {}).items() if v}
         if base_url and backend != "auto":
             self.urls[backend] = base_url
@@ -192,8 +231,15 @@ class LLMRefiner:
     def _resolve(self) -> Optional[tuple]:
         """Concrete (backend, base_url, model) for this call, honoring
         'auto' settings against whatever is loaded right now."""
+        is_auto = "auto" in (self.backend, self.model)
+        # Whatever answered last time is asked first: one quick request
+        # instead of probing every engine before each dictation.
+        last = self._last_resolved
+        if is_auto and last and detect_loaded_model(last[0], last[1]) == last[2]:
+            return last
         resolved = resolve_llm(self.backend, self.model, self.urls)
         if resolved is None:
+            self._last_resolved = None
             print("[Refiner] No model loaded on any backend; skipping refinement")
             return None
         backend, base_url, model = resolved
@@ -201,6 +247,7 @@ class LLMRefiner:
             base_url = self.base_url
         if (backend, model) != (self.backend, self.model):
             print(f"[Refiner] auto-resolved to '{model}' on {backend}")
+        self._last_resolved = (backend, base_url, model) if is_auto else None
         return backend, base_url, model
 
     def refine(self, text: str, style: str = "clean") -> str:
@@ -340,13 +387,13 @@ class LLMRefiner:
         base_url = base_url or self.base_url
         model = model or self.model
         try:
-            print(f"[LM Studio] Connecting to {base_url}...")
-            print(f"[LM Studio] Using model: {model}")
-            print(f"[LM Studio] Sending {len(prompt)} chars for refinement...")
+            print(f"[LLM] Connecting to {base_url}...")
+            print(f"[LLM] Using model: {model}")
+            print(f"[LLM] Sending {len(prompt)} chars for refinement...")
 
-            response = requests.post(
-                f"{base_url}/chat/completions",
-                json={
+            response = _post_chat(
+                base_url,
+                {
                     "model": model,
                     "messages": [
                         {"role": "system", "content": self.system_prompt},
@@ -360,17 +407,17 @@ class LLMRefiner:
 
             if response.status_code == 200:
                 result = response.json()["choices"][0]["message"]["content"].strip()
-                print(f"[LM Studio] Response received ({len(result)} chars)")
+                print(f"[LLM] Response received ({len(result)} chars)")
                 return result
             else:
-                print(f"[LM Studio] Error: HTTP {response.status_code} - {response.text[:100]}")
+                print(f"[LLM] Error: HTTP {response.status_code} - {response.text[:100]}")
                 return ""
 
         except requests.exceptions.ConnectionError:
-            print("[LM Studio] Connection failed - is LM Studio running?")
+            print("[LLM] Connection failed - is the model server running?")
             return ""
         except Exception as e:
-            print(f"[LM Studio] Error: {e}")
+            print(f"[LLM] Error: {e}")
             return ""
 
     def _refine_openai_stream(self, prompt: str, base_url: str = "",
@@ -379,9 +426,9 @@ class LLMRefiner:
         base_url = base_url or self.base_url
         model = model or self.model
         try:
-            response = requests.post(
-                f"{base_url}/chat/completions",
-                json={
+            response = _post_chat(
+                base_url,
+                {
                     "model": model,
                     "messages": [
                         {"role": "system", "content": self.system_prompt},
@@ -414,12 +461,12 @@ class LLMRefiner:
                             except json.JSONDecodeError:
                                 continue
             else:
-                print(f"LM Studio stream error: {response.status_code}")
+                print(f"LLM stream error: {response.status_code}")
 
         except requests.exceptions.ConnectionError:
-            print("Could not connect to LM Studio. Is it running?")
+            print("[LLM] Could not connect to the model server. Is it running?")
         except Exception as e:
-            print(f"LM Studio stream error: {e}")
+            print(f"LLM stream error: {e}")
 
     def check_connection(self) -> bool:
         """Check if the LLM backend is available."""
