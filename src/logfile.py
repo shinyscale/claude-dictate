@@ -67,21 +67,27 @@ class _Tee:
         return False
 
 
-def start_logging() -> Path:
-    """Route stdout/stderr through the log file. Safe to call once at
-    daemon startup; never raises (logging must not stop dictation)."""
+def start_logging(who: str = "tray app") -> Path:
+    """Route stdout/stderr through the log file. Called once at startup by
+    the tray app and by the editor (they share one file); never raises
+    (logging must not stop dictation)."""
     path = log_path()
     try:
+        # Moving a big log aside fails while the other process has it open.
+        # That is fine: it just keeps growing until a start that can.
         if path.exists() and path.stat().st_size > MAX_BYTES:
             old = path.with_suffix(".log.old")
             if old.exists():
                 old.unlink()
             path.rename(old)
+    except Exception:
+        pass
+    try:
         f = open(path, "a", encoding="utf-8", errors="replace")
         # pythonw.exe has no console: sys.stdout / sys.stderr are None there.
         sys.stdout = _Tee(f, sys.stdout)
         sys.stderr = _Tee(f, sys.stderr)
-        print(f"[Log] Claude Dictate starting (pid {os.getpid()})")
+        print(f"[Log] Claude Dictate {who} starting (pid {os.getpid()})")
     except Exception:
         pass
     return path

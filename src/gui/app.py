@@ -76,6 +76,11 @@ class ClaudeDictateGUI(ctk.CTk):
         self.system_tray: Optional[SystemTray] = None
         self._is_hidden_to_tray = False
 
+        # The tray app is what pastes at the cursor. An editor opened on its
+        # own used to take the hotkey for itself, and every dictation landed
+        # in the editor's box instead of the window being typed in.
+        self._daemon_spawned = self._ensure_daemon()
+
         # Create UI
         self._create_layout()
         self._bind_hotkey()
@@ -94,7 +99,10 @@ class ClaudeDictateGUI(ctk.CTk):
         self._check_tray_availability()
 
         # FR-012: Bind focus-out event for click-away behavior (when tray mode enabled)
-        self.bind("<FocusOut>", self._on_focus_out)
+        # Deliberately NOT bound any more (2026-11-09): clicking into another
+        # app hid this window and overwrote the clipboard with the refined
+        # text, undoing a copy made a second earlier.
+        # self.bind("<FocusOut>", self._on_focus_out)
 
     def _set_window_icon(self) -> None:
         """Set the taskbar icon for the window."""
@@ -536,6 +544,40 @@ class ClaudeDictateGUI(ctk.CTk):
         self.refined_editor = TextEditor(parent, "Refined Text")
         self.refined_editor.pack(fill="both", expand=True, pady=(8, 0))
 
+    def _tray_app_present(self) -> bool:
+        return daemon_running() or getattr(self, "_daemon_spawned", False)
+
+    def _ensure_daemon(self) -> bool:
+        """Start the tray app if it isn't running. True if we started it."""
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+        if os.name != "nt" or daemon_running():
+            return False
+        try:
+            run_py = Path(__file__).resolve().parents[2] / "run.py"
+            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: it must outlive
+            # this window.
+            subprocess.Popen(
+                [sys.executable, str(run_py), "--daemon"],
+                cwd=str(run_py.parent), close_fds=True,
+                creationflags=0x00000008 | 0x00000200,
+            )
+            print("[GUI] Tray app was not running; started it")
+            self.after(20000, self._check_daemon_started)
+            return True
+        except Exception as e:
+            print(f"[GUI] Could not start the tray app: {e}")
+            return False
+
+    def _check_daemon_started(self) -> None:
+        if self._daemon_spawned and not daemon_running():
+            # Better a hotkey that fills the editor than no hotkey at all.
+            self._daemon_spawned = False
+            print("[GUI] Tray app did not come up; the editor takes the hotkey")
+            self._bind_hotkey()
+
     def _bind_hotkey(self) -> None:
         """Bind keyboard hotkeys for recording and clear using pynput."""
         # Stop existing listeners
@@ -547,7 +589,7 @@ class ClaudeDictateGUI(ctk.CTk):
         # Record hotkey (hold-to-talk). If the tray daemon is running it
         # already owns this hotkey -- binding here too would record every
         # dictation twice, in two processes, with subtly different text.
-        if daemon_running():
+        if daemon_running() or getattr(self, "_daemon_spawned", False):
             print("[GUI] Tray daemon owns the record hotkey; "
                   "editor uses the record button only")
         else:
@@ -961,6 +1003,11 @@ class ClaudeDictateGUI(ctk.CTk):
             print("[GUI] System tray not available")
             return
 
+        if self._tray_app_present():
+            # The tray app already has the icon; a second one from this
+            # window would be a duplicate with a different menu.
+            return
+
         # Always create tray but only start if minimize_to_tray is enabled
         self.system_tray = SystemTray(
             on_show=self._show_from_tray,
@@ -1068,6 +1115,12 @@ class ClaudeDictateGUI(ctk.CTk):
 
     def on_closing(self) -> None:
         """Handle window close."""
+        # The tray app keeps running without this window, so there is
+        # nothing to hide to: closing the editor just closes the editor.
+        if self._tray_app_present():
+            self._exit_app()
+            return
+
         # If minimize to tray is enabled, hide instead of exit
         if self.config.get("minimize_to_tray", False) and is_tray_available():
             self._hide_to_tray()
@@ -1079,6 +1132,8 @@ class ClaudeDictateGUI(ctk.CTk):
 
 def run_gui() -> None:
     """Run the GUI application."""
+    from ..logfile import start_logging
+    start_logging("editor")
     app = ClaudeDictateGUI()
     app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop()

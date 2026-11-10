@@ -27,7 +27,7 @@ from .overlay import FloatingOverlay
 from ..main import ClaudeDictate, HotkeyListener
 from ..config import AppConfig
 from ..history import append_entry, mark_session_start
-from ..lockfile import write_daemon_lock, clear_daemon_lock
+from ..lockfile import write_daemon_lock, clear_daemon_lock, daemon_running
 from ..refiner import get_model_status, resolve_llm
 from ..seams import strip_refine_command, join_continuation
 from ..logfile import start_logging, open_log
@@ -100,6 +100,57 @@ class DictateDaemon:
 
         self._bind_hotkey()
         self._init_tray()
+
+        # Settings are edited in the separate editor process. Watching the
+        # file is how a new hotkey, microphone or word list reaches this one
+        # without a restart (2026-11-09: a hotkey changed in Settings was
+        # ignored until the tray app was quit and started again).
+        self._config_seen = self._config_mtime()
+        self.root.after(1500, self._watch_config)
+
+    # -- settings changed on disk --
+
+    @staticmethod
+    def _config_mtime() -> Optional[float]:
+        try:
+            return AppConfig.get_config_path().stat().st_mtime
+        except OSError:
+            return None
+
+    def _watch_config(self) -> None:
+        try:
+            seen = self._config_mtime()
+            # Never swap things out from under a recording in progress.
+            if seen != self._config_seen and not self.app.recorder.is_recording:
+                self._config_seen = seen
+                self._reload_config()
+        except Exception as e:
+            print(f"[Daemon] Settings reload failed: {e}")
+        finally:
+            self.root.after(1500, self._watch_config)
+
+    def _reload_config(self) -> None:
+        new = AppConfig.load().to_flat_dict()
+        if new == self.config:
+            return  # our own save (tray paste-mode switch), nothing to do
+        changed = sorted(k for k in set(new) | set(self.config)
+                         if new.get(k) != self.config.get(k))
+        self.config = new
+
+        self.app.cleanup()
+        self.app = ClaudeDictate(self.config)
+        self.app.recorder.on_level_update = self._on_audio_level
+        self.app.on_status_update = self._on_status
+
+        if self.hotkey_listener:
+            self.hotkey_listener.stop()
+        self._bind_hotkey()
+        self._last_paste = None
+        if self.system_tray and self.system_tray.icon:
+            self.system_tray.icon.update_menu()
+        print(f"[Daemon] Settings reloaded ({', '.join(changed)})")
+        # A different speech or clean-up model pays its load cost now.
+        threading.Thread(target=self._warm_backends, daemon=True).start()
 
     # -- warmup --
 
@@ -257,8 +308,22 @@ class DictateDaemon:
             transcript = self.app.stop_recording()
             t_transcribe = time.time() - t0
             if not transcript:
+                # Say why, in the log and on the overlay: a tap, a silent
+                # microphone and unintelligible audio need different fixes.
+                rec = self.app.recorder
+                if rec.last_seconds < 0.4:
+                    why, label = "the keys were held too briefly", "Too short"
+                elif rec.last_peak < 0.003:
+                    why, label = ("the microphone was silent (wrong input, "
+                                  "muted or unplugged)"), "No sound"
+                else:
+                    why, label = "no speech was recognised", None
+                print(f"[Daemon] Nothing to paste: {why} "
+                      f"(held {rec.last_seconds:.1f} s, mic peak {rec.last_peak:.4f})")
                 self._cue("empty")
-                self.root.after(0, self.overlay.show_empty)
+                self.root.after(
+                    0, lambda: self.overlay.set_state("empty", label=label)
+                    if label else self.overlay.show_empty())
                 return
 
             # Saying "refine this" at the end of a dictation requests the LLM
@@ -435,6 +500,12 @@ def run_daemon() -> None:
     # First, so everything after it -- including a crash while starting --
     # lands in the log instead of a console that may not exist.
     path = start_logging()
+    if daemon_running():
+        # Started at sign-in AND by hand: two copies would both hear the
+        # hotkey and paste every dictation twice.
+        print("[Daemon] Claude Dictate is already running in the tray; "
+              "this second copy is closing.")
+        return
     try:
         daemon = DictateDaemon()
         daemon.run()

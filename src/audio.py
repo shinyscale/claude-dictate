@@ -45,6 +45,10 @@ class AudioRecorder:
         self.device_name = device_name
         self.on_level_update = on_level_update
         self._warned_missing = False
+        # Facts about the last finished recording, so "nothing was heard"
+        # can say whether the hold was too short or the microphone silent.
+        self.last_seconds = 0.0
+        self.last_peak = 0.0
 
         self.audio: Optional[pyaudio.PyAudio] = None
         self.stream: Optional[pyaudio.Stream] = None
@@ -182,6 +186,16 @@ class AudioRecorder:
             self.stream.stop_stream()
             self.stream.close()
             self.stream = None
+
+        raw = b''.join(self.frames)
+        self.last_seconds = len(raw) / 2 / max(1, self.channels) / self.sample_rate
+        try:
+            from array import array
+            samples = array('h', raw[:len(raw) - len(raw) % 2])
+            self.last_peak = (max(max(samples), -min(samples)) / 32768.0
+                              if samples else 0.0)
+        except Exception:
+            self.last_peak = 0.0
 
         if not self.frames:
             # No audio captured, still clean up PyAudio

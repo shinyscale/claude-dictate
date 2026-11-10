@@ -6,8 +6,11 @@ Claude Dictate check-up. Run it after installing, or when something is off:
     python doctor.py --mic 3         # also record 3 s from the saved mic
     python doctor.py --wav clip.wav  # also transcribe a file
     python doctor.py --set-mic "IN 1-2"   # save a microphone by name
+    python doctor.py --autostart on  # start at sign-in (or: off)
 
-It changes nothing unless you pass --set-mic. Each line starts with OK,
+    python doctor.py --shortcut      # Start Menu shortcut (lets you pin it)
+
+It changes nothing unless you pass --set-mic, --autostart or --shortcut. Each line starts with OK,
 WARN or FAIL; the exit code is 1 if anything failed.
 """
 
@@ -38,6 +41,10 @@ def main() -> int:
     ap.add_argument("--wav", help="transcribe this WAV file with the saved settings")
     ap.add_argument("--set-mic", metavar="NAME",
                     help="save the microphone whose name matches NAME")
+    ap.add_argument("--shortcut", action="store_true",
+                    help="create the Start Menu shortcut (needed to pin it to the taskbar)")
+    ap.add_argument("--autostart", choices=["on", "off"],
+                    help="turn starting at sign-in on or off")
     ap.add_argument("--no-model", action="store_true",
                     help="skip loading the speech model")
     args = ap.parse_args()
@@ -49,6 +56,11 @@ def main() -> int:
 
     cfg = AppConfig.load()
     say("OK", f"settings file: {AppConfig.get_config_path()}")
+    say("OK", f"hold-to-talk keys: {cfg.hotkey.record_hotkey}")
+    from src.lockfile import daemon_running
+    say("OK" if daemon_running() else "WARN",
+        "tray app is running" if daemon_running() else
+        "tray app is NOT running; the hotkey does nothing until it is started")
 
     # ---- microphone ----
     devices = AudioRecorder.get_input_devices()
@@ -157,6 +169,19 @@ def main() -> int:
             print(f"       cleaned: {out!r}")
 
     # ---- startup ----
+    if os.name == "nt":
+        from src import shortcut
+        if args.shortcut:
+            try:
+                say("OK", f"Start Menu shortcut written: {shortcut.create()}")
+            except Exception as e:
+                say("FAIL", f"could not write the Start Menu shortcut: {e}")
+        elif shortcut.shortcut_path().exists():
+            say("OK", "Start Menu shortcut is there (search Start for Claude Dictate)")
+        else:
+            say("WARN", "no Start Menu shortcut; run: doctor.py --shortcut")
+    if args.autostart and autostart.supported():
+        autostart.set_enabled(args.autostart == "on")
     if autostart.supported():
         say("OK", "starts at sign-in: " + ("yes" if autostart.is_enabled() else
                                            "no (tray menu > Start when I sign in)"))

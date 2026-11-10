@@ -12,10 +12,12 @@ Do not include phrases like "Here is the refined text:" or similar."""
 REFINEMENT_PROMPTS = {
     "clean": """Clean up this transcribed speech:
 - Fix grammar and punctuation
-- Remove filler words (um, uh, like, you know, basically, actually)
+- Remove filler words (um, uh, like, you know, basically, actually, kind of, sort of, I mean, just)
+- Remove spoken openers that carry no content ("Okay,", "So,", "Well,", "Hey, there we go.")
 - Remove false starts and self-corrections
+- When the speaker says the same thing twice in a row, keep it once
 - Delete pure-filler sentences entirely (e.g. "Let's see. We'll see. Okay.")
-- Keep the speaker's original wording wherever it already reads fine; do not paraphrase
+- Otherwise keep the speaker's own wording; do not paraphrase or restructure
 - NEVER add words, names, facts, or ideas that are not in the transcription
 - Preserve the original meaning, tone, and personality
 

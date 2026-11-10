@@ -31,7 +31,7 @@ venv\Scripts\python.exe -m pip install --quiet --upgrade pip || exit /b 1
 venv\Scripts\python.exe -m pip install --quiet -r requirements.txt || exit /b 1
 
 echo [3/4] Check-up (downloads the speech model the first time, about 1.6 GB)...
-venv\Scripts\python.exe doctor.py
+venv\Scripts\python.exe doctor.py --shortcut
 if errorlevel 1 (
     echo.
     echo Something above says FAIL. Fix that, then run this again.
@@ -40,7 +40,7 @@ if errorlevel 1 (
 
 echo [4/4] Done.
 echo.
-echo Start it with:   run_windows.bat
+echo Start it with:   run_windows.bat   (or search Start for Claude Dictate)
 echo Then hold Ctrl+Shift anywhere, talk, and let go.
 echo To start it every time you sign in: right-click the tray icon,
 echo "Start when I sign in".

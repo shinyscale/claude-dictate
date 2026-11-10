@@ -15,6 +15,7 @@ from .theme import THEME, FONTS
 from .tray import is_tray_available, get_tray_error
 from ..audio import AudioRecorder
 from ..devices import match_device
+from .. import autostart
 from ..config import AppConfig
 
 
@@ -701,6 +702,19 @@ class SettingsPanel(ctk.CTkToplevel):
 
         tray_available = is_tray_available()
 
+        self.autostart_var = ctk.BooleanVar(value=autostart.is_enabled())
+        if autostart.supported():
+            ctk.CTkCheckBox(
+                content,
+                text="Start Claude Dictate when I sign in to Windows",
+                variable=self.autostart_var,
+                font=FONTS["body"],
+                text_color=THEME["text_secondary"],
+                fg_color=THEME["accent"],
+                hover_color=THEME["accent_hover"],
+                border_color=THEME["border"]
+            ).pack(anchor="w", pady=6)
+
         self.minimize_to_tray_var = ctk.BooleanVar(
             value=self.config.get("minimize_to_tray", False) if tray_available else False
         )
@@ -878,6 +892,11 @@ class SettingsPanel(ctk.CTkToplevel):
         self.config["output_dir"] = self.output_dir_var.get()
         self.config["system_prompt"] = self.system_prompt_text.get("1.0", "end-1c")
         self.config["minimize_to_tray"] = self.minimize_to_tray_var.get()
+
+        # Not a config value: Windows itself holds the startup entry.
+        if autostart.supported() and \
+                self.autostart_var.get() != autostart.is_enabled():
+            autostart.set_enabled(self.autostart_var.get())
 
         # Save audio device
         mic_name = self.mic_var.get()

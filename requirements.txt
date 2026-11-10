@@ -7,6 +7,9 @@ pyaudio>=0.2.13
 # Keyboard hotkeys (cross-platform, no root required on macOS)
 pynput>=1.7.6
 
+# Start Menu shortcut that Windows can pin to the taskbar
+pywin32>=306; sys_platform == "win32"
+
 # Clipboard
 pyperclip>=1.8.2
 
