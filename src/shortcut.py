@@ -57,3 +57,51 @@ def create() -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     link.QueryInterface(pythoncom.IID_IPersistFile).Save(str(path), True)
     return path
+
+
+def set_process_app_id() -> None:
+    """Give this process its own taskbar identity. Must run BEFORE the
+    window exists: Windows reads the id when the taskbar button is made,
+    and a window that already showed up as "Python" stays Python (which is
+    why pinning did nothing useful, 2026-11-09)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception as e:
+        print(f"[Shortcut] Could not set the taskbar identity: {e}")
+
+
+def tag_window(hwnd: int) -> None:
+    """Tell Windows how to relaunch this window when it is pinned: the
+    command, the name and the icon. Belt and braces with the Start Menu
+    shortcut -- with these set, the pin works even if the shortcut is
+    missing."""
+    if os.name != "nt" or not hwnd:
+        return
+    try:
+        import pythoncom
+        from win32com.propsys import propsys, pscon
+        repo = Path(__file__).resolve().parents[1]
+        exe = Path(sys.executable)
+        pythonw = exe.with_name("pythonw.exe")
+        if pythonw.exists():
+            exe = pythonw
+        store = propsys.SHGetPropertyStoreForWindow(hwnd, propsys.IID_IPropertyStore)
+
+        def put(key, value):
+            store.SetValue(key, propsys.PROPVARIANTType(value, pythoncom.VT_LPWSTR))
+
+        # The id must be written first; the relaunch values hang off it.
+        put(pscon.PKEY_AppUserModel_ID, APP_ID)
+        put(pscon.PKEY_AppUserModel_RelaunchCommand,
+            f'"{exe}" "{repo / "run.py"}" --gui')
+        put(pscon.PKEY_AppUserModel_RelaunchDisplayNameResource, NAME)
+        icon = repo / "claude_dictate.ico"
+        if icon.exists():
+            put(pscon.PKEY_AppUserModel_RelaunchIconResource, f"{icon},0")
+        store.Commit()
+        print("[Shortcut] Window tagged for pinning")
+    except Exception as e:
+        print(f"[Shortcut] Could not tag the window for pinning: {e}")

@@ -1134,8 +1134,16 @@ def run_gui() -> None:
     """Run the GUI application."""
     from ..logfile import start_logging
     start_logging("editor")
+    import os
+    from .. import shortcut
+    shortcut.set_process_app_id()  # before any window exists
     app = ClaudeDictateGUI()
     app.protocol("WM_DELETE_WINDOW", app.on_closing)
+    if os.name == "nt":
+        import ctypes
+        # winfo_id() is Tk's inner child; the taskbar button belongs to its parent.
+        app.after(300, lambda: shortcut.tag_window(
+            ctypes.windll.user32.GetParent(app.winfo_id())))
     app.mainloop()
 
 
